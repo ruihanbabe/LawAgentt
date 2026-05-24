@@ -1,0 +1,11 @@
+   # 忽略大模型文件
+   models
+   
+   # 忽略数据集文件
+   data
+   
+   # 忽略一些常见的没必要同步的Python缓存文件
+   __pycache__/
+   *.pyc
+   .env
+   
