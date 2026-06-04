@@ -164,7 +164,7 @@ def process_law_files(input_dir, output_file):
 # 使用示例
 if __name__ == "__main__":
     # 假设你的法条数据在 data/Chinese-Laws 目录下
-    input_directory = "/root/LawAgent/data/Chinese-Laws"
+    input_directory = "/root/agent/data/Chinese-Laws"
     # 输出文件将保存在 data/chinese-laws.json
     output_file = "data/chinese-laws.json"
     
