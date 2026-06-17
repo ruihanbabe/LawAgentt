@@ -30,7 +30,7 @@ from qdrant_client.models import Distance, VectorParams, SparseVectorParams
 LOCAL_BGE_M3_PATH = "/root/agent/models/bge-m3" 
 DATA_DIR = "/root/agent/data/c3rd" 
 QDRANT_HOST = "http://localhost:6333"
-COLLECTION_NAME = "legal_cases_c3rd"
+COLLECTION_NAME = "cases_collections"
 DISTANCE = Distance.COSINE
 BATCH_SIZE = 128  # Qdrant上传批次
 EMBED_BATCH_SIZE = 32  # 模型推理批次（根据显存调整）
@@ -185,25 +185,49 @@ class DataCleaner:
             amounts = self._extract_amounts(accusation_text) + self._extract_amounts(result_text)
             
             # ================= 构建用于Embedding的文本 =================
+                        # ================= 构建用于Embedding的文本 =================
             parts = []
             
-            # ✅ 优化1：使用合并后的 tags，采用更自然的语言模板
-            # 摒弃 "分类:xx-xx, 关键词:xx" 这种机器格式，减少连接词对稀疏向量的干扰
+            # ✅ 优化1：标签融合进自然语言，摒弃机器格式，贴近法官写作习惯
             if merged_tags:
                 tags_str = "，".join(merged_tags)
-                parts.append(f"本案核心标签包括：{tags_str}。")
+                # 模拟法官在文书开头的案由归纳（最核心的语义锚点）
+                parts.append(f"本案系{tags_str}纠纷。")
             
-            # ✅ 优化2：将降维后的法条也拼接入文本，增强法律依据的语义和稀疏特征
+            # ✅ 优化2：优先提取“核心匹配区”，保持原生法律文书语感
+            # 原告诉称（案件事实来源，保持原汁原味）
+            if accusation_text:
+                parts.append(f"原告诉称：{accusation_text}")
+            
+            # 争议焦点
+            dispute = key_facts.get('dispute', '')
+            if dispute:
+                parts.append(f"争议焦点：{dispute}")
+                
+            # 法院查明（客观事实）
+            court_findings = key_facts.get('court_findings', '')
+            if court_findings:
+                parts.append(f"经审理查明：{court_findings}")
+
+            # ✅ 优化3：把降维后的法条“自然地”缝回文书
+            # 之前硬拼"裁判依据法规："是灾难，但现在完全不拼又丢失了强特征
+            # 模拟判决书"本院认为，依照《XXX法》第X条，判决如下："的语境
             if ref_laws:
                 laws_str = "，".join(ref_laws)
-                parts.append(f"裁判依据法规：{laws_str}。")
+                if result_text:
+                    parts.append(f"本院认为，依照{laws_str}，判决如下：{result_text}")
+                else:
+                    parts.append(f"本院认为，依照{laws_str}。")
+            elif result_text:
+                parts.append(f"判决结果：{result_text}")
             
-            # 拼接核心事实
-            parts.append(f"争议焦点：{key_facts.get('dispute', '未明确陈述')}")
-            parts.append(f"法院查明事实：{key_facts.get('court_findings', raw_data.get('JudgeReason', ''))}")
-            if result_text: parts.append(f"判决结果：{result_text}")
+            # 兜底逻辑
+            if not parts:
+                full_reason = raw_data.get("JudgeReason", "")
+                parts.append(full_reason if full_reason else "本案详情缺失")
             
-            full_text = "\n\n".join(parts)
+            full_text = "\n".join(parts)
+
             
             return {
                 "case_id": case_id, 
@@ -216,7 +240,6 @@ class DataCleaner:
                 "initial_evidence_issue": key_facts.get("evidence_issue", False),
                 
                 # === 返回字段优化 ===
-                # 原来的 category_l1, l2, keywords 统统替换为 merged_tags
                 "case_cause": keyword_payload["case_cause"], # 保留原始案由，用于最精确的过滤
                 "tags": merged_tags,                         # 统一合并标签，用于Sparse和通用过滤
                 "ref_laws": ref_laws,
@@ -248,7 +271,7 @@ def get_embedding_batch(texts: List[str]) -> List[Dict[str, Any]]:
     """批量生成 BGE-M3 的 dense 和 sparse 向量"""
     output = embedding_model.encode(
         texts, 
-        batch_size=EMBED_BATCH_SIZE,  # 使用模型内部批次
+        batch_size=EMBED_BATCH_SIZE,  
         return_dense=True, 
         return_sparse=True, 
         return_colbert_vecs=False
@@ -256,21 +279,19 @@ def get_embedding_batch(texts: List[str]) -> List[Dict[str, Any]]:
     
     results = []
     for i in range(len(texts)):
-        # 处理 Dense 向量
+        # 1. 处理 Dense 向量
         dense_vecs = output['dense_vecs'][i].tolist()
         
-        # 处理 Sparse 向量
+        # 2. 处理 Sparse 向量 (直接从 lexical_weights 提取字典，转为 indices 和 values)
         sparse_indices = []
         sparse_values = []
-        if output.get('sparse_vecs') is not None:
-            sparse_mat = output['sparse_vecs'][i]
-            if sparse_mat.nnz > 0:
-                indices = sparse_mat.indices.tolist()
-                values = sparse_mat.data.tolist()
-                # 按索引排序
-                sorted_pairs = sorted(zip(indices, values), key=lambda x: x[0])
-                sparse_indices = [p[0] for p in sorted_pairs]
-                sparse_values = [p[1] for p in sorted_pairs]
+        lexical_weights = output['lexical_weights'][i] # M3直接返回字典 {token_id: weight}
+        
+        if lexical_weights:
+            # 按词汇ID排序，保证顺序一致性
+            sorted_items = sorted(lexical_weights.items(), key=lambda x: x[0])
+            sparse_indices = [int(k) for k, v in sorted_items]
+            sparse_values = [float(v) for k, v in sorted_items]
         
         results.append({
             'dense_vecs': dense_vecs,
@@ -280,212 +301,196 @@ def get_embedding_batch(texts: List[str]) -> List[Dict[str, Any]]:
     
     return results
 
+
 def run_ingestion():
     print("=== 开始优化后的入库流程 ===")
     
-    # 1. 检查目录
     data_path = Path(DATA_DIR)
     if not data_path.exists():
         print(f"【错误】数据目录 {data_path.absolute()} 不存在！")
         return
 
-    # 2. 解析 JSON 文件
     json_files = list(data_path.glob("*.json"))
     print(f"在 {DATA_DIR} 中找到 {len(json_files)} 个 JSON 文件。")
-    
-    if not json_files:
-        print("未找到文件，请检查路径。")
-        return
+    if not json_files: return
 
     client = QdrantClient(url=QDRANT_HOST, check_compatibility=False)
     cleaner = DataCleaner()
     
-    test_queries = []
+    test_queries = [] 
     vector_dim = embedding_model.model.config.hidden_size
     
-    # 3. 初始化 Collection (增加 Payload 索引配置)
+    # 初始化 Collection 和索引 (保持不变)
     try:
         client.create_collection(
             collection_name=COLLECTION_NAME,
             vectors_config={"dense": VectorParams(size=vector_dim, distance=DISTANCE)},
-            sparse_vectors_config={"text_sparse": SparseVectorParams()},
+            sparse_vectors_config={"sparse": SparseVectorParams()},
             optimizers_config=models.OptimizersConfigDiff(indexing_threshold=20000)
         )
         print(f"✅ Collection '{COLLECTION_NAME}' 创建成功")
     except Exception as e:
         print(f"⚠️  Collection 创建跳过 (可能已存在): {e}")
 
-    # 为新增的过滤字段创建 Payload 索引
     try:
-        # 1. 案由索引：保留原始案由数组，用于最精准的案由硬匹配过滤
-        client.create_payload_index(
-            collection_name=COLLECTION_NAME, 
-            field_name="case_cause", 
-            field_schema=models.PayloadSchemaType.KEYWORD
-        )
-        
-        # 2. 合并标签索引：替代原来的 category_l1, l2, keywords，用于通用标签过滤和Sparse辅助
-        client.create_payload_index(
-            collection_name=COLLECTION_NAME, 
-            field_name="tags", 
-            field_schema=models.PayloadSchemaType.KEYWORD
-        )
-        
-        # 3. 法条引用索引：用于跨库关联时的精准匹配
-        client.create_payload_index(
-            collection_name=COLLECTION_NAME, 
-            field_name="ref_laws", 
-            field_schema=models.PayloadSchemaType.KEYWORD
-        )
-        
-        # 4. 金额索引：支持范围查询 (例如查询金额大于10万的案例)
-        # 注意：由于 amounts 是一个对象数组，Qdrant 支持 amounts.amount 的嵌套索引
-        client.create_payload_index(
-            collection_name=COLLECTION_NAME, 
-            field_name="amounts.amount", 
-            field_schema=models.PayloadSchemaType.FLOAT
-        )
-        
+        client.create_payload_index(collection_name=COLLECTION_NAME, field_name="case_cause", field_schema=models.PayloadSchemaType.KEYWORD)
+        client.create_payload_index(collection_name=COLLECTION_NAME, field_name="tags", field_schema=models.PayloadSchemaType.KEYWORD)
+        client.create_payload_index(collection_name=COLLECTION_NAME, field_name="ref_laws", field_schema=models.PayloadSchemaType.KEYWORD)
+        client.create_payload_index(collection_name=COLLECTION_NAME, field_name="amounts.amount", field_schema=models.PayloadSchemaType.FLOAT)
         print("✅ Payload 索引创建成功")
-
-
     except Exception as e:
         print(f"⚠️  Payload 索引创建跳过 (可能已存在): {e}")
 
-    # 4. 开始流式处理
     total_count = 0
-    with open("failed_files.txt", "a", encoding="utf-8") as failed_files_log:
+    batch_texts, batch_payloads, batch_ids = [], [], []
+    
+    def flush_batch():
+        nonlocal total_count, batch_texts, batch_payloads, batch_ids
+        if not batch_texts: return
         
-        # 批量化所需的数据结构
-        batch_texts = []      # 待向量化的文本
-        batch_payloads = []   # 预处理的payload
-        batch_ids = []        # 预生成的ID
+        vectors_list = get_embedding_batch(batch_texts)
+        points = []
+        for i, vec_data in enumerate(vectors_list):
+            point = models.PointStruct(
+                id=batch_ids[i],
+                vector={
+                    "dense": vec_data['dense_vecs'],
+                    "sparse": models.SparseVector(indices=vec_data['sparse_indices'], values=vec_data['sparse_values'])
+                },
+                payload={
+                    "case_id": batch_payloads[i]["case_id"],
+                    "case_cause": batch_payloads[i]["case_cause"],
+                    "tags": batch_payloads[i]["tags"],
+                    "case_type": batch_payloads[i]["case_type"],
+                    "case_proc": batch_payloads[i]["case_proc"],
+                    "title": batch_payloads[i]["title"],
+                    "parties": batch_payloads[i]["parties"],
+                    "key_facts": batch_payloads[i]["key_facts"],
+                    "initial_evidence_issue": batch_payloads[i]["initial_evidence_issue"],
+                    "ref_laws": batch_payloads[i]["ref_laws"],
+                    "amounts": batch_payloads[i]["amounts"],
+                    "full_text": batch_payloads[i]["full_text"],
+                }
+            )
+            points.append(point)
         
-        for file_path in tqdm(json_files, desc="Processing Files"):
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    data_dict = json.load(f)
-                    
-                    if "query" in data_dict and "gt_idx" in data_dict:
-                        test_queries.append({
-                            "file": file_path.name,
-                            "query": data_dict["query"],
-                            "gt_idx": data_dict["gt_idx"]
-                        })
-                    
-                    all_cases = extract_all_cases(data_dict)
-                    print(f"文件 {file_path.name} 中找到 {len(all_cases)} 个案例。")
-                    
-                    for raw_case in all_cases:
-                        case_id = raw_case.get('CaseId', 'unknown')
-                        raw_id_str = f"{file_path.stem}_{case_id}"
-                        final_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, raw_id_str))
-                        
-                        try:
-                            # 预处理payload，但不立即计算向量
-                            payload_data = cleaner.clean_single_case(str(final_id), raw_case)
-                            
-                            # 将文本、payload和ID添加到批次列表
-                            batch_texts.append(payload_data["full_text"])
-                            batch_payloads.append(payload_data)
-                            batch_ids.append(final_id)
-                            
-                            # 当攒够一批时（比如128条），统一处理
-                            if len(batch_texts) >= BATCH_SIZE:
-                                # 批量计算向量
-                                vectors_list = get_embedding_batch(batch_texts)
-                                
-                                # 构造PointStruct列表
-                                points = []
-                                for i, vec_data in enumerate(vectors_list):
-                                    point = models.PointStruct(
-                                        id=batch_ids[i],
-                                        vector={
-                                            "dense": vec_data['dense_vecs'],
-                                            "text_sparse": models.SparseVector(
-                                                indices=vec_data['sparse_indices'],
-                                                values=vec_data['sparse_values']
-                                            )
-                                        },
-                                        payload={
-                                            "case_id": batch_payloads[i]["case_id"],
-                                            "case_cause": batch_payloads[i]["case_cause"], # 保留
-                                            "tags": batch_payloads[i]["tags"],             # 替换原有的 category 和 keywords
-                                            "case_type": batch_payloads[i]["case_type"],
-                                            "case_proc": batch_payloads[i]["case_proc"],
-                                            "title": batch_payloads[i]["title"],
-                                            "parties": batch_payloads[i]["parties"],
-                                            "key_facts": batch_payloads[i]["key_facts"],
-                                            "initial_evidence_issue": batch_payloads[i]["initial_evidence_issue"],
-                                            "ref_laws": batch_payloads[i]["ref_laws"],
-                                            "amounts": batch_payloads[i]["amounts"],
-                                            "full_text": batch_payloads[i]["full_text"],
-                                        }
-                                    )
-                                    points.append(point)
-                                
-                                # 批量上传
-                                client.upsert(
-                                    collection_name=COLLECTION_NAME,
-                                    points=points
-                                )
-                                total_count += len(points)
-                                
-                                # 清空批次列表，准备下一批
-                                batch_texts = []
-                                batch_payloads = []
-                                batch_ids = []
-                        
-                        except Exception as e:
-                            print(f"❌ 处理案例失败，文件: {file_path.name}, 案例ID: {case_id}, 错误: {e}")
-                            traceback.print_exc()
-                            failed_files_log.write(f"CASE_ERROR|{file_path.name}|{case_id}|{e}\n")
-                            continue
+        client.upsert(collection_name=COLLECTION_NAME, points=points)
+        total_count += len(points)
+        batch_texts, batch_payloads, batch_ids = [], [], []
 
-            except json.JSONDecodeError as e:
-                print(f"❌ JSON 解析失败 {file_path.name}: {e}")
-                failed_files_log.write(f"JSON_ERROR|{file_path.name}|{e}\n")
-            except Exception as e:
-                print(f"❌ 处理文件 {file_path.name} 时发生未知错误: {e}")
-                traceback.print_exc()
-                continue
-        
-        # 处理最后剩余不足BATCH_SIZE的数据
-        if batch_texts:
-            vectors_list = get_embedding_batch(batch_texts)
-            points = []
-            for i, vec_data in enumerate(vectors_list):
-                point = models.PointStruct(
-                    id=batch_ids[i],
+    for file_path in tqdm(json_files, desc="Processing Files"):
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data_dict = json.load(f)
+                
+                # ✅ 1. 提取 query_case 和 ctxs
+                query_case = data_dict.get("query_case")
+                gt_indices = data_dict.get("gt_idx", [])
+                ctxs = data_dict.get("ctxs", {})
+                
+                if not query_case or not ctxs:
+                    print(f"⚠️ 文件 {file_path.name} 缺少 query_case 或 ctxs，跳过")
+                    continue
+
+                current_query_info = None
+                
+                # ✅ 2. 优先处理并入库 Query Case
+                query_case_id = query_case.get('CaseId', 'unknown')
+                query_raw_str = f"{file_path.stem}_{query_case_id}"
+                query_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, query_raw_str))
+                
+                query_payload = cleaner.clean_single_case(query_uuid, query_case)
+                
+                q_vec = get_embedding_batch([query_payload["full_text"]])[0]
+                q_point = models.PointStruct(
+                    id=query_uuid,
                     vector={
-                        "dense": vec_data['dense_vecs'],
-                        "text_sparse": models.SparseVector(
-                            indices=vec_data['sparse_indices'],
-                            values=vec_data['sparse_values']
-                        )
+                        "dense": q_vec['dense_vecs'],
+                        "sparse": models.SparseVector(indices=q_vec['sparse_indices'], values=q_vec['sparse_values'])
                     },
                     payload={
-                        "case_id": batch_payloads[i]["case_id"],
-                        "case_cause": batch_payloads[i]["case_cause"], # 保留
-                        "tags": batch_payloads[i]["tags"],             # 替换原有的 category 和 keywords
-                        "case_type": batch_payloads[i]["case_type"],
-                        "case_proc": batch_payloads[i]["case_proc"],
-                        "title": batch_payloads[i]["title"],
-                        "parties": batch_payloads[i]["parties"],
-                        "key_facts": batch_payloads[i]["key_facts"],
-                        "initial_evidence_issue": batch_payloads[i]["initial_evidence_issue"],
-                        "ref_laws": batch_payloads[i]["ref_laws"],
-                        "amounts": batch_payloads[i]["amounts"],
-                        "full_text": batch_payloads[i]["full_text"],
-                    }   
+                        "case_id": query_payload["case_id"],
+                        "case_cause": query_payload["case_cause"],
+                        "tags": query_payload["tags"],
+                        "case_type": query_payload["case_type"],
+                        "case_proc": query_payload["case_proc"],
+                        "title": query_payload["title"],
+                        "parties": query_payload["parties"],
+                        "key_facts": query_payload["key_facts"],
+                        "initial_evidence_issue": query_payload["initial_evidence_issue"],
+                        "ref_laws": query_payload["ref_laws"],
+                        "amounts": query_payload["amounts"],
+                        "full_text": query_payload["full_text"],
+                    }
                 )
-                points.append(point)
-            
-            client.upsert(
-                collection_name=COLLECTION_NAME,
-                points=points
-            )
-            total_count += len(points)
+                client.upsert(collection_name=COLLECTION_NAME, points=[q_point])
+                total_count += 1
+                
+                # 暂存 query 信息
+                current_query_info = {
+                    "query_id": query_uuid,
+                    "query_text": query_payload["full_text"],
+                    "gt_indices": gt_indices,
+                    "ref_laws": query_payload.get("ref_laws", []),
+                    "reference_answer": query_case.get("JudgeReason", "")
+                }
+
+                # ✅ 3. 处理普通 Case (从 ctxs 字典提取)，维护 UUID 列表
+                # 核心：用字典推导式按数字顺序 0, 1, 2... 提取，保证和 gt_idx 对齐
+                sorted_ctx_keys = sorted([int(k) for k in ctxs.keys()])
+                
+                # 预分配一个足够大的列表，索引即为 ctxs 的 key
+                file_case_uuid_map = {}
+
+                for ctx_idx in sorted_ctx_keys:
+                    raw_case = ctxs[str(ctx_idx)]
+                    case_id = raw_case.get('CaseId', 'unknown')
+                    raw_id_str = f"{file_path.stem}_{case_id}"
+                    final_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, raw_id_str))
+                    
+                    try:
+                        payload_data = cleaner.clean_single_case(str(final_id), raw_case)
+                        
+                        batch_texts.append(payload_data["full_text"])
+                        batch_payloads.append(payload_data)
+                        batch_ids.append(final_id)
+                        
+                        # ✅ 核心：将 UUID 放入对应的索引位置
+                        file_case_uuid_map[ctx_idx] = final_id
+                        
+                        if len(batch_texts) >= BATCH_SIZE:
+                            flush_batch()
+                    
+                    except Exception as e:
+                        print(f"❌ 处理案例失败，文件: {file_path.name}, ctx_idx: {ctx_idx}, 案例ID: {case_id}, 错误: {e}")
+                        file_case_uuid_map[ctx_idx] = None
+
+                # ✅ 4. 文件遍历结束，根据 gt_idx 延迟赋值
+                if current_query_info and file_case_uuid_map:
+                    mapped_gt_case_ids = []
+                    # gt_idx 是绝对索引 (如 12, 94)，直接按图索骥
+                    for idx in current_query_info["gt_indices"]:
+                        uuid_val = file_case_uuid_map.get(idx)
+                        if uuid_val is not None:
+                            mapped_gt_case_ids.append(uuid_val)
+                        else:
+                            # 如果在字典里找不到，或者值为 None，说明该索引的案例处理失败了
+                            print(f"⚠️ 警告: 文件 {file_path.name} 的 gt_idx {idx} 未成功处理或不存在")
+                    test_queries.append({
+                        "query_id": current_query_info["query_id"],
+                        "query_text": current_query_info["query_text"],
+                        "ground_truth_case_ids": mapped_gt_case_ids,
+                        "ground_truth_law_ids": current_query_info["ref_laws"],
+                        "reference_answer": current_query_info["reference_answer"]
+                    })
+
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON 解析失败 {file_path.name}: {e}")
+        except Exception as e:
+            print(f"❌ 处理文件 {file_path.name} 时发生未知错误: {e}")
+            traceback.print_exc()
+    
+    flush_batch()
 
     # --- 5. 保存测试集 ---
     if test_queries:
@@ -494,9 +499,10 @@ def run_ingestion():
             for item in test_queries:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
         print(f"✅ 测试集已保存到: {test_file} (共 {len(test_queries)} 条)")
+    else:
+        print("⚠️ 未提取到任何测试集数据，请检查 JSON 文件是否包含 query 和 gt_idx 字段。")
     
     print(f"=== 入库完成！总共处理 {total_count} 条案例 ===")
-    print(f"失败的文件已记录到: failed_files.txt")
 
 if __name__ == "__main__":
     run_ingestion()

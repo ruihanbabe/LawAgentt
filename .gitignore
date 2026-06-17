@@ -5,13 +5,11 @@ models/
 data/
 
 # ============ 其他大文件 ============
-failed_files.txt
+
 
 # ============ Python 常见忽略项 ============
 __pycache__/
 *.pyc
 .env
-lawagent/
-venv/
-env/
+chroma_db/
 
