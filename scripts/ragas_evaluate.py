@@ -15,7 +15,7 @@ from datasets import Dataset
 
 # ================= 配置区 =================
 LOCAL_BGE_M3_PATH = "/root/agent/models/bge-m3"
-QWEN_API_KEY = "sk-ws-H.REXMLXY.cwkN.MEUCIQCCY2IKh1RnG6Lks8NN8wH7DXHHKIAJDhkkEdk22garoQIgTtjgY5Y02dYjcr6VwvJX7YNwitWPS0Ocibq7skihTaA"  # ← 请替换
+QWEN_API_KEY = os.environ["QWEN_API_KEY"]
 QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 TESTSET_PATH = "/root/agent/data/test_queries.jsonl"
 

@@ -1,0 +1,54 @@
+# LawAgent 当前环境与依赖台账
+
+> 用途：记录“服务器上实际安装了什么”以及“项目准备安装什么”。
+> 可复现安装仍使用 Python 社区标准文件 `requirements.txt`；本文件是人工维护的审计台账。
+> 最后核对：2026-07-29（Asia/Shanghai）
+
+## 当前解释器
+
+- Conda 环境：`agent`
+- Python：3.11.15
+- 路径：`/root/miniconda3/envs/agent/bin/python`
+- pip：26.1.2
+- 环境性质：LawAgent 独立 Conda 环境
+- 计算资源：8 CPU、43 GB 内存、当前实例无 GPU
+
+## 当前环境结论
+
+- 已有 Python 3.11 独立环境，可直接作为当前开发环境。
+- FastAPI、Qdrant Client、FlagEmbedding、Sentence Transformers、Torch 等已安装。
+- LangGraph、LangChain、LangChain OpenAI 与 RAGAS 尚未安装，现有 Agent/API 代码还不能完整启动。
+- 环境包含 CUDA 版 Torch 依赖，但当前服务器未检测到 GPU；代码仍需支持 CPU 自动回退。
+- 不直接把完整 `pip freeze` 当作顶层依赖；待依赖选型稳定后生成锁定文件。
+
+## 项目直接依赖（待重新选版）
+
+| 能力 | 候选包 | 当前声明 | 当前环境 |
+|---|---|---:|---|
+| Agent 状态图 | `langgraph` | 缺失 | 未安装 |
+| LLM 抽象 | `langchain`、`langchain-openai` | `>=0.1.0` | 未安装 |
+| 向量数据库 | `qdrant-client` | 缺失 | `1.18.0` |
+| Embedding / Reranker | `FlagEmbedding`、`sentence-transformers` | 缺失 | `1.4.0` / `5.6.1` |
+| API | `fastapi`、`uvicorn` | 已声明 | `0.140.8` / `0.51.0` |
+| 配置与模型 | `pydantic`、`pydantic-settings`、`python-dotenv` | 部分声明 | `2.13.4` / 未安装 / 未安装 |
+| HTTP | `httpx` | `>=0.27.0` | `0.28.1` |
+| 评估 | `ragas`、`datasets` | 缺失 | 未安装 |
+| 测试与质量 | `pytest`、`pytest-asyncio`、`ruff`、`mypy` | 缺失 | 未安装 |
+
+其他关键已安装版本：`torch==2.6.0`、`transformers==5.14.1`、
+`datasets==5.0.0`、`numpy==2.4.6`、`pandas==3.0.5`。
+
+## 依赖维护约定
+
+1. `requirements.txt` 只列顶层运行依赖；后续增加 `requirements-dev.txt` 管理测试和质量工具。
+2. 每次安装、升级或删除包，同步更新本文件的日期、原因和验证结果。
+3. 锁定文件由工具生成，不手工编辑；候选方案为 `uv.lock`。
+4. 禁止把 API Key、服务器绝对路径或本地模型文件写入依赖文件。
+5. Python、Qdrant 和模型版本均视为运行时依赖，必须在开发说明中记录。
+
+## 变更记录
+
+| 日期 | 变更 | 原因 | 验证 |
+|---|---|---|---|
+| 2026-07-29 | 建立依赖台账 | 项目初始化与迁移准备 | 已核对 Python、pip、`pip freeze` |
+| 2026-07-29 | 切换到 `agent` Conda 环境 | 使用既有项目虚拟环境 | 已核对解释器及完整 `pip freeze` |
