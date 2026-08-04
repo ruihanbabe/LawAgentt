@@ -2,7 +2,7 @@
 
 > 用途：记录“服务器上实际安装了什么”以及“项目准备安装什么”。
 > 可复现安装仍使用 Python 社区标准文件 `requirements.txt`；本文件是人工维护的审计台账。
-> 最后核对：2026-07-29（Asia/Shanghai）
+> 最后核对：2026-08-04（Asia/Shanghai）
 
 ## 当前解释器
 
@@ -11,26 +11,46 @@
 - 路径：`/root/miniconda3/envs/agent/bin/python`
 - pip：26.1.2
 - 环境性质：LawAgent 独立 Conda 环境
-- 计算资源：8 CPU、43 GB 内存、当前实例无 GPU
+- 计算资源：8 CPU、43 GB 内存、RTX 3090 24GB；宿主终端 CUDA 可用，Codex 默认沙箱不映射 GPU 设备节点
 
 ## 当前环境结论
 
 - 已有 Python 3.11 独立环境，可直接作为当前开发环境。
 - FastAPI、Qdrant Client、FlagEmbedding、Sentence Transformers、Torch 等已安装。
-- LangGraph、LangChain、LangChain OpenAI 与 RAGAS 尚未安装，现有 Agent/API 代码还不能完整启动。
-- 环境包含 CUDA 版 Torch 依赖，但当前服务器未检测到 GPU；代码仍需支持 CPU 自动回退。
+- LangGraph、LangChain、LangChain OpenAI 与 RAGAS 尚未安装；它们不作为当前 MVP 依赖。旧 Agent/API 原型仍依赖 LangGraph/LangChain，暂作历史原型，当前开发转向自研轻量 Agent Runtime。
+- 环境包含 CUDA 版 Torch。2026-08-04 宿主终端核验 `nvidia-smi` 与 PyTorch CUDA 正常，并使用 RTX 3090 完成 66,448 条法规向量入库；Codex 默认沙箱仍因设备隔离不可见。代码使用 `device=auto|cpu|cuda`。
 - 不直接把完整 `pip freeze` 当作顶层依赖；待依赖选型稳定后生成锁定文件。
+- Docker Engine 已从官方 Ubuntu Jammy APT 仓库安装并完成容器运行验证。当前环境无可用 systemd bus，daemon 使用项目专用目录和 Unix socket 手动运行。
+
+## 系统运行依赖
+
+| 能力 | 当前版本 | 当前运行方式 |
+|---|---:|---|
+| Docker Engine / CLI | `29.7.1` | daemon 手动启动；`data-root=/root/lawagent/.runtime/docker-data` |
+| Docker Compose | `v5.4.0` | Docker CLI 插件 |
+| containerd | `2.2.6` | 由 Docker daemon 使用 |
+| Qdrant Server | `1.18.2` | `compose.yaml` 固定镜像；collections `laws_collection`、`cases_collection` |
+
+当前 Docker 客户端连接变量：
+
+```bash
+export DOCKER_HOST=unix:///tmp/lawagent-docker.sock
+```
+
+该 socket 位于 `/tmp`，服务器或任务环境重启后需要重新启动 daemon；不得改成无认证的 TCP 监听。
 
 ## 项目直接依赖（待重新选版）
 
 | 能力 | 候选包 | 当前声明 | 当前环境 |
 |---|---|---:|---|
-| Agent 状态图 | `langgraph` | 缺失 | 未安装 |
-| LLM 抽象 | `langchain`、`langchain-openai` | `>=0.1.0` | 未安装 |
-| 向量数据库 | `qdrant-client` | 缺失 | `1.18.0` |
-| Embedding / Reranker | `FlagEmbedding`、`sentence-transformers` | 缺失 | `1.4.0` / `5.6.1` |
+| Agent Runtime | 自研 `lawagent_runtime` | 已开始 | 无新增外部依赖 |
+| LangGraph 对照 | `langgraph` | 后续对照候选；当前不声明 | 未安装 |
+| LLM 抽象 | 待选；不默认绑定 LangChain | 缺失 | `langchain`、`langchain-openai` 未安装 |
+| 向量数据库 | `qdrant-client` | `==1.18.0` | `1.18.0` |
+| Embedding / Reranker | `FlagEmbedding`、`sentence-transformers` | `FlagEmbedding==1.4.0` | `1.4.0` / `5.6.1` |
 | API | `fastapi`、`uvicorn` | 已声明 | `0.140.8` / `0.51.0` |
 | 配置与模型 | `pydantic`、`pydantic-settings`、`python-dotenv` | 部分声明 | `2.13.4` / 未安装 / 未安装 |
+| 中文数字 | `cn2an` | `==0.5.24` | `0.5.24`（直接依赖；带入 `proces==0.1.7`） |
 | HTTP | `httpx` | `>=0.27.0` | `0.28.1` |
 | 评估 | `ragas`、`datasets` | 缺失 | 未安装 |
 | 测试与质量 | `pytest`、`pytest-asyncio`、`ruff`、`mypy` | 缺失 | 未安装 |
@@ -52,3 +72,6 @@
 |---|---|---|---|
 | 2026-07-29 | 建立依赖台账 | 项目初始化与迁移准备 | 已核对 Python、pip、`pip freeze` |
 | 2026-07-29 | 切换到 `agent` Conda 环境 | 使用既有项目虚拟环境 | 已核对解释器及完整 `pip freeze` |
+| 2026-07-31 | 安装 `cn2an==0.5.24`（带入 `proces==0.1.7`） | 正确解析复合中文法条编号 | 已验证“一百二十→120、三百九十→390”；安装位置属于 `agent` 环境 |
+| 2026-08-04 | 从 Docker 官方 Jammy APT 仓库安装 Docker CE | 使用容器运行 Qdrant并提高迁移性 | Engine/CLI `29.7.1`、Compose `v5.4.0`、containerd `2.2.6`；`hello-world` 运行成功 |
+| 2026-08-04 | 启动 Qdrant `1.18.2` 并执行 BGE-M3 GPU 入库 | 建立法规与案例检索基线数据层 | RTX 3090；法规 66,448 points、案例 92,523 points；均为 dense 1,024 + sparse；集合在线状态 green |
