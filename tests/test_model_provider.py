@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from lawagent_runtime.model_provider import (
+from runtime.model_provider import (
     ModelBudget,
     ModelErrorCode,
     ModelGateway,
@@ -12,7 +12,7 @@ from lawagent_runtime.model_provider import (
     ModelUsage,
     ProviderResponse,
 )
-from lawagent_runtime.taskboard import AgentRunBoard, AgentRunTrace
+from runtime.taskboard import AgentRunBoard, AgentRunTrace
 
 
 class FakeProvider:

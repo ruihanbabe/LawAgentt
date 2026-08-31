@@ -5,12 +5,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from lawagent_runtime.glm_provider import (
+from infrastructure.glm_provider import (
     GLM_DEFAULT_FREE_MODEL,
     GLMProvider,
     build_glm_profile_configs,
 )
-from lawagent_runtime.model_provider import ModelProfile, ProviderRequest
+from runtime.model_provider import ModelProfile, ProviderRequest
 
 
 class FakeCompletions:
@@ -97,8 +97,8 @@ class GLMProviderTests(unittest.TestCase):
         client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
         with (
             patch.dict("os.environ", {"GLM_MIN_CALL_INTERVAL_SECONDS": "5"}, clear=True),
-            patch("lawagent_runtime.glm_provider.monotonic", side_effect=[10.0, 11.0, 15.0]),
-            patch("lawagent_runtime.glm_provider.sleep") as sleeper,
+            patch("infrastructure.glm_provider.monotonic", side_effect=[10.0, 11.0, 15.0]),
+            patch("infrastructure.glm_provider.sleep") as sleeper,
         ):
             provider = GLMProvider(client=client)
             provider.generate(self.request())

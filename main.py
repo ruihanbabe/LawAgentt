@@ -12,8 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 import api.sse as sse_api
 from api.sse import ChatInput, build_chat_stream
-from lawagent_runtime.storage import FaultInjectingConversationRepository
-from lawagent_runtime.trace_tools import trace_view
+from persistence.storage import FaultInjectingConversationRepository
+from persistence.trace_tools import trace_view
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent

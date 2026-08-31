@@ -4,24 +4,15 @@ import unittest
 
 from pydantic import ValidationError
 
-from lawagent_runtime import (
-    AgentRole,
-    CaseEvidenceView,
-    PatchTarget,
-    PIIPolicy,
-    PIIReviewer,
-    PIIStatus,
-    RunState,
+from knowledge.evidence_views import CaseEvidenceView, build_case_evidence_view, build_law_evidence_view
+from safety.pii import PIIPolicy, PIIReviewer, PIIStatus
+from runtime.tools import (
     ToolExecutor,
     ToolPermission,
     ToolRegistry,
     ToolResult,
     ToolResultStatus,
     ToolSpec,
-    apply_authorized_patch,
-    build_case_evidence_view,
-    build_law_evidence_view,
-    tool_result_to_state_patches,
 )
 
 
@@ -213,41 +204,6 @@ class RuntimeToolContractTest(unittest.TestCase):
         self.assertEqual(result.status, ToolResultStatus.FAILED)
         self.assertEqual(result.metadata["error_code"], "tool_execution_error")
         self.assertIn("qdrant unavailable", result.error or "")
-
-    def test_tool_result_to_state_patches_can_update_run_state(self) -> None:
-        item = build_case_evidence_view(case_payload(), party_names=["张三"], score=0.8)
-        result = ToolResult(
-            tool_name="search_cases",
-            status=ToolResultStatus.SUCCESS,
-            items=[item],
-            latency_ms=12,
-            metadata={
-                "normalized_query": "押金返还",
-                "top_k": 5,
-                "applied_filters": {"case_causes": ["租赁合同纠纷"]},
-            },
-        )
-        state = RunState.start("租房押金不退怎么办")
-
-        patches = tool_result_to_state_patches(
-            result,
-            run_id=state.run_id,
-            author_role=AgentRole.RETRIEVAL,
-            intent_id="intent-1",
-            issue_id="issue-1",
-        )
-        self.assertEqual([patch.target for patch in patches], [PatchTarget.RETRIEVAL_ATTEMPTS, PatchTarget.EVIDENCE_ITEMS])
-        for patch in patches:
-            apply_authorized_patch(state, patch)
-
-        self.assertEqual(len(state.retrieval_attempts), 1)
-        self.assertEqual(state.retrieval_attempts[0].status.value, "success")
-        self.assertEqual(state.retrieval_attempts[0].result_count, 1)
-        self.assertEqual(state.retrieval_attempts[0].applied_filters, {"case_causes": ["租赁合同纠纷"]})
-        self.assertEqual(len(state.evidence_items), 1)
-        self.assertEqual(state.evidence_items[0].source_type.value, "case")
-        self.assertEqual(state.evidence_items[0].issue_ids, ["issue-1"])
-
 
 if __name__ == "__main__":
     unittest.main()

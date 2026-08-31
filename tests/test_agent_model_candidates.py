@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from lawagent_runtime.blackboard import SufficiencyDecision
-from lawagent_runtime.board_runtime import (
+from intake.blackboard import SufficiencyDecision
+from runtime.board_runtime import (
     AnalysisAgent,
     ResponseAgent,
     RetrievalAgent,
@@ -11,10 +11,10 @@ from lawagent_runtime.board_runtime import (
     SafetyAgent,
     UnderstandingAgent,
 )
-from lawagent_runtime.context import ContextService
-from lawagent_runtime.messages import AgentRole
-from lawagent_runtime.model_provider import ModelProfile
-from lawagent_runtime.taskboard import AgentRunBoard, Artifact, ArtifactType, BoardTask
+from runtime.context import ContextService
+from runtime.messages import AgentRole
+from runtime.model_provider import ModelProfile
+from runtime.taskboard import AgentRunBoard, Artifact, ArtifactType, BoardTask
 
 
 class RecordingGenerator:

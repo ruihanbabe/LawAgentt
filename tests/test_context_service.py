@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from lawagent_runtime.context import ContextService
-from lawagent_runtime.messages import AgentRole
-from lawagent_runtime.storage import HistoryMessage
-from lawagent_runtime.taskboard import AgentRunBoard, Artifact, ArtifactType, BoardTask
+from runtime.context import ContextService
+from runtime.messages import AgentRole
+from persistence.storage import HistoryMessage
+from runtime.taskboard import AgentRunBoard, Artifact, ArtifactType, BoardTask
 
 
 class ContextServiceTests(unittest.TestCase):

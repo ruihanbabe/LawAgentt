@@ -1,48 +1,44 @@
-# LawAgent Current Progress
-> 摘要：这是根目录唯一的项目进度总览，回答“已完成、正在做、被什么阻塞”。
-> 摘要：这里只保存当前快照，不保存逐 session 历史；历史证据在 `docs/project/STATUS.md` 和 worksheets。
-> 摘要：任务的 owner、优先级和验收标准以 `TODOS.md` 为准，接手步骤与环境恢复以 `HANDOFF.md` 为准。
-> 摘要：状态必须由代码、命令输出、测试报告或明确用户决定支持，不能由旧 handoff 推断。
-> 摘要：2026-08-19 当前离线基线是 compileall 与 147/147 unittest 通过，真实模型调用为零。
-> 摘要：外部 Qdrant、Redis/PostgreSQL 与浏览器引擎当前未完成验证，不能用历史或 Fake 测试替代。
+# LawAgent 当前进度
 
-## 已完成
+## 已实现
 
-- 住宅押金纠纷 MVP 的产品范围、系统设计、接口、信源和测试契约已经建立。
-- FastAPI Web/SSE 入口、六角色 TaskBoard Harness、两轮事实状态与最小权限 ContextView 已接通。
-- ToolExecutor、Qdrant Adapter、安全 Evidence DTO、GLM Provider/Profile 和结构化候选调用已实现。
-- DeliveryGate 已覆盖 provenance、Review、Claim-Evidence、法规有效期、PII、禁止承诺、内部标识、十段响应和 Trace fail-closed。
-- supported、safe-error、limited、constructive-abstention 四条 SSE/ASGI 路径已有离线 E2E。
-- 脱敏 Trace View、Replay、白名单故障注入及 Redis/PostgreSQL 存储 Adapter 已实现并通过 Fake 客户端契约测试。
-- 新会话五问入口、环境预检、应用启动和核心验证入口已经建立；旧巨型 handoff 和重复 Requirements 已迁移删除。
-- 根目录 `Makefile` 已收敛 setup、status、run、health、compile、test、lint、check、Qdrant 和模型 smoke 标准命令。
-- Redis 7.4.2 与 PostgreSQL 16.6 已通过 Compose 安装并健康运行；agent 环境已安装 redis-py 6.4.0 与 psycopg 3.3.4，真实持久化 smoke 通过。
+- FastAPI Web/SSE 聊天入口和健康检查。
+- Conversation Harness：Runtime 选择、历史/画像端口、PII 处理和 Trace 持久化。
+- TaskBoard Runtime：Safety、Understanding、Retrieval、Analysis、Response、Review 六类角色。
+- Matter Blackboard、角色化 Context、结构化模型候选和确定性回退。
+- Tool Registry/Executor，以及可选 Qdrant 案例/法规 Adapter。
+- DeliveryGate：证据、Review、法规有效期、PII 和回答结构门禁。
+- 开发态 Trace、Replay 和故障注入接口。
+- 默认内存存储，以及 Redis/PostgreSQL Adapter。
 
-## 正在做
+## 部分实现
 
-1. 恢复真实 Qdrant 端口，完成 Qdrant → Evidence → DeliveryGate 组合验证。
-2. 把已验证的 Redis/PostgreSQL Adapter 接入应用组装配置，并补删除级联/重启恢复 E2E。
-3. 提供浏览器引擎后执行 Web 提交、SSE 消费、Trace Viewer 和视觉回归。
-4. 建立 30 条固定产品评测、确定性金额工具与用户触发的文本式文书建议。
-5. 建立统一 lint、独立跨模型 Review、benchmark、profile 和完整产品验证入口。
+- 当前行为主要针对租赁押金场景。
+- Redis/PostgreSQL 尚未接入默认应用组装。
+- 当前环境尚未重新验证真实 GLM、Qdrant 数据和服务健康。
+- Intake、Safety、Knowledge、Persistence 和 Infrastructure 职责已有实现，但尚未全部形成独立物理模块。
 
-## 当前阻塞
+## 未实现
 
-| 阻塞 | 影响 | 解除条件 |
-|---|---|---|
-| Qdrant 容器曾启动但 `127.0.0.1:6333` 当前不可达 | 不能声明实时检索与 DeliveryGate 组合链已复验 | 恢复端口并保存 collection/查询/交付证据 |
-| 没有 Playwright/Selenium/浏览器二进制 | 浏览器 E2E 与视觉回归无法执行 | 安装或提供浏览器运行环境 |
-| `bin/agent_review`、视觉、benchmark/profile 入口缺失 | 0–18 工作流不能完整收尾 | 实现统一入口并由不同模型/Persona 执行 |
-| Git ownership 安全检查 | status/log/commit/tag 尚未按工作流完成 | 在不修改用户全局配置的前提下提供安全仓库访问方式 |
+- 没有依赖锁文件和可在本地完整复现的项目环境。
+- 当前没有 ingestion/evaluation 包、固定产品评测集、浏览器 E2E、性能基线、金额计算器、文书生成或 MCP 集成。
 
-## 最近验证
+## 当前重点
 
-- `/root/miniconda3/envs/agent/bin/python -m compileall ...`：通过。
-- `/root/miniconda3/envs/agent/bin/python -m unittest discover -s tests -v`：147/147 通过。
-- ASGI HTTP 正常完成与 Trace 故障安全错误路径：通过。
-- 真实 API `GET /health`：已在显式测试端口启动验证通过。
-- 当前 `bin/project_status`：关键文件/Python READY；`.env` 存在；Qdrant unavailable。
+| 优先级 | 任务 | 完成证据 |
+|---:|---|---|
+| P0 | 建立可复现的 Python 依赖定义并运行当前全部测试 | 依赖文件/锁文件、干净环境安装和完整测试输出 |
+| P0 | 在目标服务器重新验证当前应用 | 同一 revision 的 Git 状态、启动、`/health`、`/chat` 和环境报告 |
+| P0 | 重新验证 Qdrant 集合及 Runtime → Evidence → DeliveryGate 链路 | 当前 Schema/版本、有限 smoke 和失败路径证据 |
+| P1 | 决定并实现 Redis/PostgreSQL 默认应用接入 | 显式配置、重启恢复、TTL/删除行为和集成测试 |
+| P1 | 分离租赁押金特定逻辑与可复用 TaskBoard 机制 | 小而稳定的接口、租赁与非租赁行为测试 |
+| P1 | 产品契约重新确认后再建立固定 MVP 评测集 | 版本化 fixture、确定性门禁、Trace 覆盖和指标边界 |
+| P2 | 加入 lint/type-check 并纳入 `make check` | 可复现配置和当前代码树零错误输出 |
 
-## 下一恢复点
+## 阻塞
 
-先运行 `bin/project_status` 和 `bin/verify_all`。不要自动重复调用真实 GLM；现有六角色矩阵已有四角色成功、Safety/Review 限流的记录。随后优先处理不消耗模型 token 的 Qdrant 组合验证。
+- 本地 Python 3.11 环境缺少 `pydantic`、`fastapi`、`httpx` 和 Ruff，无法运行全部测试或 lint；语法编译已通过。
+- 当前没有可复现依赖定义，不能通过临时安装证明新环境可复现。
+- 真实 GLM、Qdrant 和持久化服务状态尚未在当前代码版本重新验证。
+
+任何状态改为“已实现”前，都必须在目标服务器的同一代码版本上重新验证。真实模型调用、远程服务器访问和付费工作必须获得用户明确授权。

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from lawagent_runtime.env import EnvFileError, load_project_env
+from infrastructure.env import EnvFileError, load_project_env
 
 
 class ProjectEnvTests(unittest.TestCase):

@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import unittest
 
-from lawagent_runtime.board_runtime import (
+from runtime.board_runtime import (
     AgentDelivery,
     IntentAgent,
     SafeResponseAgent,
     TaskBoardRuntime,
     build_default_agents,
 )
-from lawagent_runtime.harness import ConversationHarness, RuntimeRegistry
-from lawagent_runtime.messages import AgentRole
-from lawagent_runtime.evidence_views import CaseEvidenceView, LawEvidenceView
-from lawagent_runtime.tools import (
+from conversation.harness import ConversationHarness, RuntimeRegistry
+from runtime.messages import AgentRole
+from knowledge.evidence_views import CaseEvidenceView, LawEvidenceView
+from runtime.tools import (
     ToolExecutor,
     ToolPermission,
     ToolRegistry,
@@ -20,7 +20,7 @@ from lawagent_runtime.tools import (
     ToolResultStatus,
     ToolSpec,
 )
-from lawagent_runtime.taskboard import (
+from runtime.taskboard import (
     AgentRunBoard,
     Artifact,
     ArtifactType,

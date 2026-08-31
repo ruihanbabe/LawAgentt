@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import unittest
 
-from lawagent_runtime.board_runtime import TaskBoardRuntime, build_default_agents
-from lawagent_runtime.harness import ConversationHarness, RuntimeRegistry
-from lawagent_runtime.storage import (
+from runtime.board_runtime import TaskBoardRuntime, build_default_agents
+from conversation.harness import ConversationHarness, RuntimeRegistry
+from persistence.storage import (
     InMemoryConversationRepository,
     InMemoryUserProfileStore,
     UserProfile,

@@ -4,12 +4,12 @@ import unittest
 from unittest.mock import patch
 
 from api.sse import ChatInput, build_chat_stream
-from lawagent_runtime.board_runtime import AgentDelivery, TaskBoardRuntime, build_default_agents
-from lawagent_runtime.evidence_views import CaseEvidenceView, LawEvidenceView
-from lawagent_runtime.harness import ConversationHarness, RuntimeRegistry
-from lawagent_runtime.messages import AgentRole
-from lawagent_runtime.taskboard import Artifact, ArtifactType, EventType, RunStatus
-from lawagent_runtime.tools import (
+from runtime.board_runtime import AgentDelivery, TaskBoardRuntime, build_default_agents
+from knowledge.evidence_views import CaseEvidenceView, LawEvidenceView
+from conversation.harness import ConversationHarness, RuntimeRegistry
+from runtime.messages import AgentRole
+from runtime.taskboard import Artifact, ArtifactType, EventType, RunStatus
+from runtime.tools import (
     ToolExecutor,
     ToolPermission,
     ToolRegistry,

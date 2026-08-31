@@ -4,11 +4,13 @@ import unittest
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from lawagent_ingestion.laws.embedder import EmbeddedBatch
-from lawagent_runtime import (
+from infrastructure.embedder import EmbeddedBatch
+from knowledge.qdrant_tools import (
     FetchCaseEvidenceAdapter,
     SearchCasesAdapter,
     SearchStatutesAdapter,
+)
+from runtime.tools import (
     ToolExecutor,
     ToolPermission,
     ToolRegistry,

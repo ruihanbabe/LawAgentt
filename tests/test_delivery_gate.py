@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 from datetime import date
 
-from lawagent_runtime.delivery_gate import DeliveryGate
-from lawagent_runtime.taskboard import AgentRunBoard, Artifact, ArtifactType, BoardTask
+from safety.delivery_gate import DeliveryGate
+from runtime.taskboard import AgentRunBoard, Artifact, ArtifactType, BoardTask
 
 
 class DeliveryGateTests(unittest.TestCase):

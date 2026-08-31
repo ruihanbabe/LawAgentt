@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
 set -u
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-python_bin="${LAWAGENT_PYTHON:-/root/miniconda3/envs/agent/bin/python}"
+python_bin="${LAWAGENT_PYTHON:-python3}"
 echo "LawAgent five-question preflight"
 echo "project: ${project_root}"
-for path in README.md PROGRESS.md main.py docs/product/requirements.md docs/design/SYSTEM_DESIGN.md docs/testing/TESTING.md HANDOFF.md docs/project/STATUS.md TODOS.md; do
+for path in README.md ARCHITECTURE.md PROGRESS.md DOCUMENT-WRITING.md main.py src/api/sse.py src/conversation/harness.py src/runtime/board_runtime.py src/safety/delivery_gate.py src/knowledge/qdrant_tools.py src/persistence/storage.py src/infrastructure/glm_provider.py docs/README.md docs/product/requirements.md; do
   [[ -e "${project_root}/${path}" ]] && echo "READY file ${path}" || echo "BLOCKED missing ${path}"
 done
-[[ -x "${python_bin}" ]] && echo "READY python $(${python_bin} --version 2>&1)" || echo "BLOCKED python ${python_bin}"
+if command -v "${python_bin}" >/dev/null 2>&1; then
+  python_version="$(${python_bin} --version 2>&1)"
+  if "${python_bin}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'; then
+    echo "READY python ${python_version}"
+  else
+    echo "BLOCKED python 3.11+ required; found ${python_version}"
+  fi
+else
+  echo "BLOCKED python ${python_bin}"
+fi
 [[ -f "${project_root}/.env" ]] && echo "READY local .env present (contents not inspected)" || echo "OPTIONAL .env absent; GLM remains disabled"
-qdrant_url="${QDRANT_URL:-http://127.0.0.1:6333}"
-curl --max-time 2 -fsS "${qdrant_url}/collections" >/dev/null 2>&1 && echo "READY qdrant ${qdrant_url}" || echo "OPTIONAL qdrant unavailable ${qdrant_url}"
-echo "CURRENT see PROGRESS.md; recovery HANDOFF.md; queue TODOS.md"
+echo "CURRENT status and queue: PROGRESS.md"
+echo "OPTIONAL service readiness is checked by the dedicated Make targets"

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-python_bin="${LAWAGENT_PYTHON:-/root/miniconda3/envs/agent/bin/python}"
+python_bin="${LAWAGENT_PYTHON:-python3}"
 cd "${project_root}"
+export PYTHONPATH="${project_root}/src${PYTHONPATH:+:${PYTHONPATH}}"
 exec "${python_bin}" -m uvicorn main:app --host "${LAWAGENT_HOST:-127.0.0.1}" --port "${LAWAGENT_PORT:-8000}"

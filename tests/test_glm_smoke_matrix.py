@@ -4,8 +4,8 @@ import unittest
 from unittest.mock import patch
 
 from api.sse import build_configured_harness
-from lawagent_runtime.model_provider import ModelProfile
-from lawagent_runtime.taskboard import AgentRunBoard, EventType
+from runtime.model_provider import ModelProfile
+from runtime.taskboard import AgentRunBoard, EventType
 from scripts.smoke_glm_six_roles import quality_matrix
 
 

@@ -6,9 +6,9 @@ from unittest.mock import patch
 import httpx
 
 import api.sse as sse_api
-from lawagent_runtime.board_runtime import TaskBoardRuntime, build_default_agents
-from lawagent_runtime.harness import ConversationHarness, RuntimeRegistry
-from lawagent_runtime.storage import FaultInjectingConversationRepository, InMemoryConversationRepository
+from runtime.board_runtime import TaskBoardRuntime, build_default_agents
+from conversation.harness import ConversationHarness, RuntimeRegistry
+from persistence.storage import FaultInjectingConversationRepository, InMemoryConversationRepository
 from main import app
 
 

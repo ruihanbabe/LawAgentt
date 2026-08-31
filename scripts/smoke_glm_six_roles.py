@@ -15,13 +15,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from lawagent_runtime.evidence_views import CaseEvidenceView, LawEvidenceView
-from lawagent_runtime.env import load_project_env
-from lawagent_runtime.glm_provider import build_glm_gateway_from_env
-from lawagent_runtime.harness import build_default_harness
-from lawagent_runtime.model_provider import ModelProfile
-from lawagent_runtime.taskboard import EventType
-from lawagent_runtime.tools import (
+from knowledge.evidence_views import CaseEvidenceView, LawEvidenceView
+from infrastructure.env import load_project_env
+from infrastructure.glm_provider import build_glm_gateway_from_env
+from conversation.harness import build_default_harness
+from runtime.model_provider import ModelProfile
+from runtime.taskboard import EventType
+from runtime.tools import (
     ToolExecutor,
     ToolPermission,
     ToolRegistry,

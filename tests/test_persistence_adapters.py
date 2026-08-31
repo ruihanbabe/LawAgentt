@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from lawagent_runtime.persistence_adapters import (
+from persistence.persistence_adapters import (
     PostgresConversationRepository,
     RedisUserProfileStore,
 )
-from lawagent_runtime.storage import HistoryMessage, UserProfile
+from persistence.storage import HistoryMessage, UserProfile
 
 
 class FakeRedis:
