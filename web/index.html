@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LawAgent 法律助手</title>
+    <style>
+      :root { color-scheme: light; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+      body { margin: 0; background: #f5f6f8; color: #1f2937; }
+      main { width: min(720px, calc(100% - 32px)); margin: 12vh auto 0; }
+      h1 { margin-bottom: 8px; font-size: 28px; }
+      p { margin-top: 0; color: #667085; line-height: 1.7; }
+      form { display: grid; gap: 12px; margin-top: 24px; }
+      textarea { box-sizing: border-box; width: 100%; min-height: 128px; resize: vertical; padding: 14px; border: 1px solid #d0d5dd; border-radius: 10px; font: inherit; line-height: 1.6; }
+      textarea:focus { border-color: #2563eb; outline: 3px solid #dbeafe; }
+      button { justify-self: end; border: 0; border-radius: 8px; padding: 10px 22px; background: #1d4ed8; color: white; font: inherit; cursor: pointer; }
+      button:disabled { cursor: wait; opacity: .55; }
+      #answer { min-height: 96px; margin-top: 28px; padding: 18px; border-radius: 10px; background: white; box-shadow: 0 1px 3px rgb(16 24 40 / 10%); white-space: pre-wrap; line-height: 1.75; }
+      #status { min-height: 24px; margin-top: 10px; font-size: 14px; color: #667085; }
+      .error { color: #b42318 !important; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>LawAgent 法律助手</h1>
+      <p>请输入你的法律问题。系统提供基于检索证据的信息辅助，不替代执业律师意见。</p>
+      <form id="chat-form">
+        <label for="question">问题</label>
+        <textarea id="question" maxlength="8000" placeholder="例如：租房合同到期后，房东拒绝退还押金怎么办？" required></textarea>
+        <button id="submit" type="submit">发送</button>
+      </form>
+      <section id="answer" aria-live="polite">回答将在这里显示。</section>
+      <div id="status" aria-live="polite"></div>
+    </main>
+    <script>
+      const form = document.querySelector("#chat-form");
+      const question = document.querySelector("#question");
+      const submit = document.querySelector("#submit");
+      const answer = document.querySelector("#answer");
+      const status = document.querySelector("#status");
+      const generatedUserId = crypto.randomUUID
+        ? crypto.randomUUID()
+        : `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const userId = localStorage.getItem("lawagent_user_id") || generatedUserId;
+      localStorage.setItem("lawagent_user_id", userId);
+
+      function consumeFrame(frame) {
+        const dataLine = frame.split("\n").find((line) => line.startsWith("data:"));
+        if (!dataLine) return false;
+        const raw = dataLine.slice(5).trimStart();
+        if (raw === "[DONE]") return true;
+
+        const event = JSON.parse(raw);
+        if (event.type === "chunk") answer.textContent += event.content;
+        if (event.type === "tool_call") status.textContent = `正在调用：${event.content}`;
+        if (event.type === "tool_result") status.textContent = "检索完成，正在组织回答…";
+        if (event.type === "done") status.textContent = "回答完成";
+        if (event.type === "error") {
+          status.textContent = event.content;
+          status.classList.add("error");
+        }
+        return false;
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const text = question.value.trim();
+        if (!text) return;
+
+        submit.disabled = true;
+        answer.textContent = "";
+        status.textContent = "正在生成回答…";
+        status.classList.remove("error");
+
+        try {
+          const response = await fetch("/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text, user_id: userId }),
+          });
+          if (!response.ok || !response.body) throw new Error(`请求失败（${response.status}）`);
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let finished = false;
+          while (!finished) {
+            const { value, done } = await reader.read();
+            buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+            const frames = buffer.split(/\r?\n\r?\n/);
+            buffer = frames.pop() || "";
+            for (const frame of frames) finished = consumeFrame(frame) || finished;
+            if (done) break;
+          }
+          if (buffer.trim()) consumeFrame(buffer);
+        } catch (error) {
+          status.textContent = error instanceof Error ? error.message : "连接中断，请稍后重试。";
+          status.classList.add("error");
+        } finally {
+          submit.disabled = false;
+          question.focus();
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -u
+project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+python_bin="${LAWAGENT_PYTHON:-/root/miniconda3/envs/agent/bin/python}"
+echo "LawAgent five-question preflight"
+echo "project: ${project_root}"
+for path in README.md PROGRESS.md main.py docs/product/requirements.md docs/design/SYSTEM_DESIGN.md docs/testing/TESTING.md HANDOFF.md docs/project/STATUS.md TODOS.md; do
+  [[ -e "${project_root}/${path}" ]] && echo "READY file ${path}" || echo "BLOCKED missing ${path}"
+done
+[[ -x "${python_bin}" ]] && echo "READY python $(${python_bin} --version 2>&1)" || echo "BLOCKED python ${python_bin}"
+[[ -f "${project_root}/.env" ]] && echo "READY local .env present (contents not inspected)" || echo "OPTIONAL .env absent; GLM remains disabled"
+qdrant_url="${QDRANT_URL:-http://127.0.0.1:6333}"
+curl --max-time 2 -fsS "${qdrant_url}/collections" >/dev/null 2>&1 && echo "READY qdrant ${qdrant_url}" || echo "OPTIONAL qdrant unavailable ${qdrant_url}"
+echo "CURRENT see PROGRESS.md; recovery HANDOFF.md; queue TODOS.md"

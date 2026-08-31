@@ -69,17 +69,21 @@ def load_track(evaluation_dir: Path, track: str) -> list[EvalQuery]:
     return queries
 
 
-def rrf_fuse(dense: Sequence[str], sparse: Sequence[str], rrf_k: int = 60) -> list[str]:
+def weighted_rrf_fuse(rankings: Sequence[tuple[Sequence[str], float]], rrf_k: int = 60) -> list[str]:
     scores: dict[str, float] = defaultdict(float)
     first_seen: dict[str, int] = {}
     ordinal = 0
-    for ranking in (dense, sparse):
+    for ranking, weight in rankings:
         for rank, case_id in enumerate(ranking, start=1):
             if case_id not in first_seen:
                 first_seen[case_id] = ordinal
                 ordinal += 1
-            scores[case_id] += 1.0 / (rrf_k + rank)
+            scores[case_id] += weight / (rrf_k + rank)
     return sorted(scores, key=lambda case_id: (-scores[case_id], first_seen[case_id]))
+
+
+def rrf_fuse(dense: Sequence[str], sparse: Sequence[str], rrf_k: int = 60) -> list[str]:
+    return weighted_rrf_fuse(((dense, 1.0), (sparse, 1.0)), rrf_k)
 
 
 def per_query_metrics(ranking: Sequence[str], relevant: set[str], ks: Sequence[int]) -> dict[str, float]:

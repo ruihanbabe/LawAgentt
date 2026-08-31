@@ -290,9 +290,27 @@ def build_dry_run(data_dir: Path, output_dir: Path, evaluation_dir: Path, report
         "case_type_counts": dict(sorted(Counter(point.case_type or "null" for point in points).items())),
     }
 
+    empty_legal_basis_review = [
+        {
+            "case_id": document.case_id,
+            "title": document.title,
+            "source_paths": document.source_paths,
+            "empty_items": [
+                index
+                for index, item in enumerate(document.legal_basis)
+                if not item.law and not item.terms
+            ],
+            "legal_basis": [item.model_dump(mode="json") for item in document.legal_basis],
+        }
+        for document in documents
+        if any(not item.law and not item.terms for item in document.legal_basis)
+    ]
+    profile["empty_legal_basis_review_cases"] = len(empty_legal_basis_review)
+
     document_count, document_hash = write_jsonl(output_dir / "documents.jsonl", (item.model_dump(mode="json") for item in documents))
     point_count, point_hash = write_jsonl(output_dir / "retrieval_points.jsonl", (item.model_dump(mode="json") for item in points))
     write_jsonl(output_dir / "case_conflicts.jsonl", conflicts)
+    write_jsonl(report_dir / "legal_basis_empty_review.jsonl", empty_legal_basis_review)
     write_jsonl(evaluation_dir / "template_queries.jsonl", template_queries)
     write_jsonl(evaluation_dir / "case_queries.jsonl", case_queries)
     write_jsonl(evaluation_dir / "qrels.jsonl", qrels)

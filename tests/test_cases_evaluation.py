@@ -5,12 +5,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lawagent_evaluation.cases import load_track, per_query_metrics, rrf_fuse
+from lawagent_evaluation.cases import load_track, per_query_metrics, rrf_fuse, weighted_rrf_fuse
 
 
 class CaseEvaluationTest(unittest.TestCase):
     def test_rrf_rewards_documents_present_in_both_rankings(self) -> None:
         self.assertEqual(rrf_fuse(["a", "b"], ["b", "c"])[0], "b")
+
+    def test_weighted_rrf_can_add_an_independent_retrieval_lane(self) -> None:
+        result = weighted_rrf_fuse(((['semantic'], 1.0), (['structural'], 2.0)))
+        self.assertEqual(result[0], "structural")
 
     def test_metrics_support_multiple_relevant_cases(self) -> None:
         result = per_query_metrics(["x", "b", "a"], {"a", "b"}, [1, 3])

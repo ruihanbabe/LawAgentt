@@ -62,6 +62,10 @@ class CaseIngestionTest(unittest.TestCase):
         self.assertEqual(document.legal_basis[0].law, "")
         self.assertEqual(document.legal_basis[0].terms, "")
 
+    def test_document_does_not_claim_unknown_source_authority(self) -> None:
+        document, _ = normalize_case(sample_case(), ["0.json#ctxs/1"])
+        self.assertNotIn("source_authority_level", document.model_dump())
+
 
 if __name__ == "__main__":
     unittest.main()

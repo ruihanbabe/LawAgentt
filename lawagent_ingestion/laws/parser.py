@@ -5,7 +5,7 @@ import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable
 
@@ -24,9 +24,18 @@ ARTICLE_RE = re.compile(
 NUMBERED_ITEM_RE = re.compile(
     r"^(?P<label>[〇零一二三四五六七八九十百千万两]+)、\s*(?P<body>.*)$"
 )
-EFFECTIVE_RE = re.compile(
-    r"(?:自\s*)?(?P<year>\d{4})年(?P<month>\d{1,2})月(?P<day>\d{1,2})日\s*起?施行"
+FILENAME_DATE_RE = re.compile(r"[（(](?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})[）)]$")
+ANY_DATE_RE = re.compile(r"(?P<year>\d{4})年(?P<month>\d{1,2})月(?P<day>\d{1,2})日")
+REPEAL_FROM_RE = re.compile(
+    r"(?P<evidence>(?:本法|本条例|本规定|本办法|本决定|本解释)?\s*"
+    r"自\s*(?P<year>\d{4})年(?P<month>\d{1,2})月(?P<day>\d{1,2})日\s*起?"
+    r"(?:废止|停止施行|失效))"
 )
+VALID_UNTIL_RE = re.compile(
+    r"(?P<evidence>(?:有效期|施行期限)[^。；\n]{0,16}?(?:至|到)\s*"
+    r"(?P<year>\d{4})年(?P<month>\d{1,2})月(?P<day>\d{1,2})日)"
+)
+CANONICAL_ARTICLE_NO_RE = re.compile(r"^[1-9]\d*(?:-[1-9]\d*)?$")
 AMENDMENT_TITLE_RE = re.compile(r"^(?:中华人民共和国)?(?:刑法|宪法|.+法)修正案(?:[（(].+[）)])?$")
 
 
@@ -37,6 +46,24 @@ class ParseResult:
     chunks: list[LawChunk]
     excluded_reason: str | None = None
     warnings: list[str] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EffectiveDateResolution:
+    value: date | None
+    method: str | None
+    evidence: str | None
+    confidence: str
+    warning: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EffectiveEndResolution:
+    value: date | None
+    method: str | None
+    evidence: str | None
+    confidence: str
+    warning: str | None = None
 
 
 def sha256_text(value: str) -> str:
@@ -59,6 +86,23 @@ def normalize_article_no(base: str, suffix: str | None) -> str:
     return f"{base_no}-{normalize_number(suffix)}" if suffix else base_no
 
 
+def _date_from_match(match: re.Match[str]) -> date | None:
+    try:
+        return date(int(match["year"]), int(match["month"]), int(match["day"]))
+    except ValueError:
+        return None
+
+
+def extract_filename_date(path: Path) -> date | None:
+    match = FILENAME_DATE_RE.search(path.stem)
+    return _date_from_match(match) if match else None
+
+
+def article_sort_key(article_no: str) -> tuple[int, int]:
+    base, separator, suffix = article_no.partition("-")
+    return int(base), int(suffix) if separator else 0
+
+
 class LawParser:
     def __init__(self, data_root: Path):
         self.data_root = data_root.resolve()
@@ -72,8 +116,11 @@ class LawParser:
         path = path.resolve()
         relative = path.relative_to(self.data_root).as_posix()
         raw = path.read_text(encoding="utf-8")
-        title_match = TITLE_RE.search(raw)
-        title = title_match.group(1).strip() if title_match else path.stem
+        header = INFO_END_RE.split(raw, maxsplit=1)[0]
+        header_titles = [match.group(1).strip() for match in TITLE_RE.finditer(header)]
+        title = header_titles[0] if header_titles else path.stem
+        if title == "中华人民共和国民法典" and len(header_titles) > 1:
+            title = f"{title}·{header_titles[1]}"
         doc_type, authority, excluded = self._classify(relative, title)
         if excluded:
             return ParseResult(relative, None, [], excluded_reason=excluded, warnings=[])
@@ -83,7 +130,15 @@ class LawParser:
         family_key = f"CN|{doc_type.value}|{normalized}"
         family_id = str(uuid.uuid5(uuid.NAMESPACE_URL, family_key))
         version_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{family_id}|{raw_hash}"))
-        effective_from = self._extract_effective_from(raw)
+        date_resolution = self._extract_effective_from(raw, path)
+        if relative == "宪法/宪法修正案（2018年）.md":
+            date_resolution = EffectiveDateResolution(
+                date(2018, 3, 11),
+                "known_document_special_case",
+                "2018年3月11日 第十三届全国人民代表大会第一次会议通过",
+                "high",
+            )
+        end_resolution = self._extract_effective_to(raw)
         document = LawDocumentVersion(
             law_family_id=family_id,
             law_version_id=version_id,
@@ -92,14 +147,29 @@ class LawParser:
             document_type=doc_type,
             authority=authority,
             authority_level=self._authority_level(doc_type),
-            effective_from=effective_from,
+            effective_from=date_resolution.value,
+            effective_from_method=date_resolution.method,
+            effective_from_evidence=date_resolution.evidence,
+            effective_from_confidence=date_resolution.confidence,
+            effective_to=end_resolution.value,
+            effective_to_method=end_resolution.method,
+            effective_to_evidence=end_resolution.evidence,
+            effective_to_confidence=end_resolution.confidence,
             source_path=relative,
+            source_name="国家法律法规数据库",
+            source_authority_level="official",
             content_hash=raw_hash,
         )
 
         parts = INFO_END_RE.split(raw, maxsplit=1)
         body = parts[1] if len(parts) == 2 else raw
         warnings: list[str] = []
+        if date_resolution.warning:
+            warnings.append(date_resolution.warning)
+        if end_resolution.warning:
+            warnings.append(end_resolution.warning)
+        if document.effective_from and document.effective_to and document.effective_to <= document.effective_from:
+            warnings.append("invalid_effective_interval")
         if len(parts) == 1:
             warnings.append("missing_info_end")
 
@@ -115,6 +185,7 @@ class LawParser:
                     item["chunk_type"] = "amendment_item"
         else:
             raw_chunks = self._parse_articles(body)
+            warnings.extend(self._validate_article_chunks(raw_chunks))
             if not raw_chunks:
                 raw_chunks = self._parse_sections(body)
                 warnings.append("no_articles_used_sections")
@@ -131,6 +202,8 @@ class LawParser:
             return DocumentType.NON_NORMATIVE, None, "case_article"
         if top == "其他":
             return DocumentType.NON_NORMATIVE, None, "non_normative_other"
+        if top == "刑法" and AMENDMENT_TITLE_RE.fullmatch(title.strip()):
+            return DocumentType.AMENDMENT, "全国人民代表大会或其常务委员会", "criminal_law_amendment_not_indexed"
         if AMENDMENT_TITLE_RE.fullmatch(title.strip()):
             return DocumentType.AMENDMENT, "全国人民代表大会或其常务委员会", None
         if top == "司法解释":
@@ -155,15 +228,66 @@ class LawParser:
         }.get(doc_type)
 
     @staticmethod
-    def _extract_effective_from(raw: str) -> date | None:
-        matches = list(EFFECTIVE_RE.finditer(raw))
-        if not matches:
-            return None
-        match = matches[-1]
-        try:
-            return date(int(match["year"]), int(match["month"]), int(match["day"]))
-        except ValueError:
-            return None
+    def _extract_effective_from(raw: str, path: Path) -> EffectiveDateResolution:
+        filename_value = extract_filename_date(path)
+        candidates: list[tuple[int, date, str]] = []
+        for keyword in re.finditer("施行", raw):
+            start = max(0, keyword.start() - 100)
+            end = min(len(raw), keyword.end() + 100)
+            window = raw[start:end]
+            for match in ANY_DATE_RE.finditer(window):
+                value = _date_from_match(match)
+                if value:
+                    absolute_start = start + match.start()
+                    distance = abs(absolute_start - keyword.start())
+                    candidates.append((distance, value, window.strip()))
+
+        if candidates:
+            _, text_value, evidence = min(candidates, key=lambda item: item[0])
+            if filename_value and abs((filename_value - text_value).days) > 1096:
+                return EffectiveDateResolution(
+                    filename_value,
+                    "filename_date_three_year_override",
+                    f"{path.name}；正文施行邻近日期={text_value.isoformat()}",
+                    "high",
+                )
+            return EffectiveDateResolution(text_value, "text_near_effective_keyword", evidence, "high")
+
+        if filename_value:
+            return EffectiveDateResolution(filename_value, "filename_date_fallback", path.name, "high")
+        return EffectiveDateResolution(None, None, None, "unresolved")
+
+    @staticmethod
+    def _extract_effective_to(raw: str) -> EffectiveEndResolution:
+        repeal_matches = list(REPEAL_FROM_RE.finditer(raw))
+        if repeal_matches:
+            match = repeal_matches[-1]
+            value = _date_from_match(match)
+            if value:
+                return EffectiveEndResolution(value, "explicit_repeal_from", match["evidence"], "high")
+            return EffectiveEndResolution(None, None, match["evidence"], "unresolved", "invalid_explicit_effective_to")
+        until_matches = list(VALID_UNTIL_RE.finditer(raw))
+        if until_matches:
+            match = until_matches[-1]
+            value = _date_from_match(match)
+            if value:
+                return EffectiveEndResolution(value + timedelta(days=1), "explicit_valid_through_inclusive", match["evidence"], "high")
+            return EffectiveEndResolution(None, None, match["evidence"], "unresolved", "invalid_explicit_effective_to")
+        return EffectiveEndResolution(None, None, None, "unresolved")
+
+    @staticmethod
+    def _validate_article_chunks(chunks: list[dict]) -> list[str]:
+        article_numbers = [str(item.get("article_no") or "") for item in chunks]
+        warnings: list[str] = []
+        if any(not CANONICAL_ARTICLE_NO_RE.fullmatch(value) for value in article_numbers):
+            warnings.append("invalid_article_no")
+        if len(article_numbers) != len(set(article_numbers)):
+            warnings.append("duplicate_article_no")
+        if article_numbers:
+            keys = [article_sort_key(value) for value in article_numbers if CANONICAL_ARTICLE_NO_RE.fullmatch(value)]
+            if keys != sorted(keys):
+                warnings.append("non_monotonic_article_no")
+        return warnings
 
     @staticmethod
     def _parse_articles(body: str) -> list[dict]:
@@ -260,6 +384,11 @@ class LawParser:
             authority=document.authority,
             authority_level=document.authority_level,
             effective_from=document.effective_from,
+            effective_from_method=document.effective_from_method,
+            effective_from_confidence=document.effective_from_confidence,
+            effective_to=document.effective_to,
+            effective_to_method=document.effective_to_method,
+            effective_to_confidence=document.effective_to_confidence,
             validity_status=document.validity_status,
             source_path=document.source_path,
             source_authority_level=document.source_authority_level,

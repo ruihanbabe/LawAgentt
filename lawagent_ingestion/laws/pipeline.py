@@ -22,8 +22,8 @@ from qdrant_client.models import (
 from tqdm import tqdm
 
 from .embedder import BGEM3Embedder
-from .models import LawChunk
-from .parser import LawParser, ParseResult, sha256_text
+from .models import DocumentType, LawChunk
+from .parser import LawParser, ParseResult, extract_filename_date, sha256_text
 
 
 VECTOR_SIZE = 1024
@@ -81,6 +81,11 @@ def profile_results(results: list[ParseResult]) -> dict:
     types = Counter(result.document.document_type.value for result in included if result.document)
     chunk_types = Counter(chunk.chunk_type for chunk in chunks)
     effective_missing = sum(result.document.effective_from is None for result in included if result.document)
+    effective_methods = Counter((result.document.effective_from_method or "unresolved") for result in included if result.document)
+    effective_confidence = Counter(result.document.effective_from_confidence for result in included if result.document)
+    effective_to_missing = sum(result.document.effective_to is None for result in included if result.document)
+    effective_to_methods = Counter((result.document.effective_to_method or "unresolved") for result in included if result.document)
+    effective_to_confidence = Counter(result.document.effective_to_confidence for result in included if result.document)
     duplicate_chunk_ids = len(chunks) - len({chunk.chunk_id for chunk in chunks})
     duplicate_version_ids = len(included) - len({result.document.law_version_id for result in included if result.document})
     return {
@@ -94,11 +99,80 @@ def profile_results(results: list[ParseResult]) -> dict:
         "chunks_by_type": dict(sorted(chunk_types.items())),
         "effective_from_missing": effective_missing,
         "effective_from_present": len(included) - effective_missing,
+        "effective_from_by_method": dict(sorted(effective_methods.items())),
+        "effective_from_by_confidence": dict(sorted(effective_confidence.items())),
+        "effective_to_missing": effective_to_missing,
+        "effective_to_present": len(included) - effective_to_missing,
+        "effective_to_by_method": dict(sorted(effective_to_methods.items())),
+        "effective_to_by_confidence": dict(sorted(effective_to_confidence.items())),
         "warnings": dict(sorted(warnings.items())),
         "duplicate_chunk_ids": duplicate_chunk_ids,
         "duplicate_version_ids": duplicate_version_ids,
         "empty_included_documents": sum(not result.chunks for result in included),
     }
+
+
+def apply_family_version_dates(results: list[ParseResult]) -> None:
+    """Use filename dates for every member of a multi-version full-text family."""
+    families: dict[str, list[ParseResult]] = {}
+    for result in results:
+        document = result.document
+        if document is None or document.document_type is DocumentType.AMENDMENT:
+            continue
+        families.setdefault(document.law_family_id, []).append(result)
+
+    for family_results in families.values():
+        if len(family_results) < 2:
+            continue
+        for result in family_results:
+            document = result.document
+            filename_value = extract_filename_date(Path(result.source_path))
+            if filename_value is None:
+                result.warnings = [*(result.warnings or []), "multi_version_missing_filename_date"]
+                continue
+            document.effective_from = filename_value
+            document.effective_from_method = "filename_date_family_version"
+            document.effective_from_evidence = Path(result.source_path).name
+            document.effective_from_confidence = "high"
+            for chunk in result.chunks:
+                chunk.effective_from = filename_value
+                chunk.effective_from_method = document.effective_from_method
+                chunk.effective_from_confidence = "high"
+
+
+def derive_version_intervals(results: list[ParseResult]) -> None:
+    """Close an older full-text version at the next dated version's start.
+
+    Amendments are excluded because their commencement does not replace the
+    consolidated parent law.
+    """
+    families: dict[str, list[ParseResult]] = {}
+    for result in results:
+        document = result.document
+        if document is None or document.document_type is DocumentType.AMENDMENT or document.effective_from is None:
+            continue
+        families.setdefault(document.law_family_id, []).append(result)
+
+    for family_results in families.values():
+        family_results.sort(key=lambda item: (item.document.effective_from, item.document.law_version_id))
+        for older_result, newer_result in zip(family_results, family_results[1:]):
+            older = older_result.document
+            newer = newer_result.document
+            if older.effective_from == newer.effective_from:
+                older_result.warnings = [*(older_result.warnings or []), "same_family_same_effective_from"]
+                newer_result.warnings = [*(newer_result.warnings or []), "same_family_same_effective_from"]
+                continue
+            if older.effective_to is not None:
+                continue
+            older.effective_to = newer.effective_from
+            older.effective_to_method = "next_full_version_effective_from"
+            older.effective_to_evidence = f"superseded_by:{newer.law_version_id}"
+            older.effective_to_confidence = "high"
+            newer.supersedes_version_id = older.law_version_id
+            for chunk in older_result.chunks:
+                chunk.effective_to = older.effective_to
+                chunk.effective_to_method = older.effective_to_method
+                chunk.effective_to_confidence = older.effective_to_confidence
 
 
 def parse_and_write(
@@ -123,6 +197,8 @@ def parse_and_write(
             result.chunks = []
         else:
             canonical_versions[version_id] = result.source_path
+    apply_family_version_dates(results)
+    derive_version_intervals(results)
     documents = [result.document for result in results if result.document is not None]
     chunks = [chunk for result in results for chunk in result.chunks]
     profile = profile_results(results)
@@ -198,6 +274,11 @@ def ensure_collection(client: QdrantClient, collection_name: str) -> None:
         "authority_level": PayloadSchemaType.KEYWORD,
         "validity_status": PayloadSchemaType.KEYWORD,
         "effective_from": PayloadSchemaType.DATETIME,
+        "effective_from_method": PayloadSchemaType.KEYWORD,
+        "effective_from_confidence": PayloadSchemaType.KEYWORD,
+        "effective_to": PayloadSchemaType.DATETIME,
+        "effective_to_method": PayloadSchemaType.KEYWORD,
+        "effective_to_confidence": PayloadSchemaType.KEYWORD,
         "article_no": PayloadSchemaType.KEYWORD,
         "chunk_type": PayloadSchemaType.KEYWORD,
         "source_path": PayloadSchemaType.KEYWORD,

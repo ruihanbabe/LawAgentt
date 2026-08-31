@@ -46,7 +46,6 @@ class CaseDocument(BaseModel):
     jurisdiction: str = "CN"
     source_paths: list[str] = Field(default_factory=list)
     source_count: int = Field(ge=1)
-    source_authority_level: str = "unknown"
     content_hash: str
     schema_version: str = SCHEMA_VERSION
     pipeline_version: str = PIPELINE_VERSION
@@ -81,4 +80,3 @@ class CaseRetrievalPoint(BaseModel):
         payload = self.model_dump(mode="json")
         payload.pop("retrieval_text", None)
         return payload
-

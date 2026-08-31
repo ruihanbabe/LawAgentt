@@ -10,6 +10,7 @@ from .state import new_id, utc_now
 
 class AgentRole(StrEnum):
     ORCHESTRATOR = "orchestrator"
+    SAFETY = "safety"
     INTAKE = "intake"
     RETRIEVAL = "retrieval"
     ANALYSIS = "analysis"
@@ -28,6 +29,7 @@ class MessageType(StrEnum):
     DRAFT_RESULT = "draft_result"
     REVIEW_RESULT = "review_result"
     CLARIFICATION_REQUEST = "clarification_request"
+    RISK_RESULT = "risk_result"
     ERROR = "error"
 
 

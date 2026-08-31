@@ -7,8 +7,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-SCHEMA_VERSION = "laws-v0.1"
-PIPELINE_VERSION = "laws-ingest-v0.1"
+SCHEMA_VERSION = "laws-v0.2"
+PIPELINE_VERSION = "laws-ingest-v0.2"
 
 
 class DocumentType(StrEnum):
@@ -41,7 +41,13 @@ class LawDocumentVersion(BaseModel):
     authority_level: str | None = None
     jurisdiction: str = "CN"
     effective_from: date | None = None
+    effective_from_method: str | None = None
+    effective_from_evidence: str | None = None
+    effective_from_confidence: Literal["high", "medium", "low", "unresolved"] = "unresolved"
     effective_to: date | None = None
+    effective_to_method: str | None = None
+    effective_to_evidence: str | None = None
+    effective_to_confidence: Literal["high", "medium", "low", "unresolved"] = "unresolved"
     validity_status: ValidityStatus = ValidityStatus.UNVERIFIED
     status_verified_at: datetime | None = None
     source_name: str = "local-laws-dataset"
@@ -69,7 +75,11 @@ class LawChunk(BaseModel):
     authority_level: str | None = None
     jurisdiction: str = "CN"
     effective_from: date | None = None
+    effective_from_method: str | None = None
+    effective_from_confidence: Literal["high", "medium", "low", "unresolved"] = "unresolved"
     effective_to: date | None = None
+    effective_to_method: str | None = None
+    effective_to_confidence: Literal["high", "medium", "low", "unresolved"] = "unresolved"
     validity_status: ValidityStatus = ValidityStatus.UNVERIFIED
     source_path: str
     source_authority_level: Literal["official", "secondary", "unknown"] = "unknown"
@@ -87,4 +97,3 @@ class LawChunk(BaseModel):
         payload = self.model_dump(mode="json")
         payload.pop("embedding_text", None)
         return payload
-
