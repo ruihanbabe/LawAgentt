@@ -6,6 +6,7 @@
 |---|---|
 | 当前架构、模块边界与数据所有权 | `../ARCHITECTURE.md` |
 | 本地环境、命令和可选服务 | `development/DEVELOPMENT.md` |
+| Feature 清单与当前验收状态 | `features.json` |
 | 产品目的和 MVP 目标范围 | `product/requirements.md` |
 | 法律信源与证据约束 | `sources/SOURCE_POLICY.md` |
 

@@ -1,5 +1,27 @@
 # LawAgent 当前进度
 
+## 当前状态
+
+- 工作树：`.gitignore` 有一项未提交修改，修改前须保留并核对其意图。
+- 推送：提交尚未推送。SSH 网络解析曾指向私网地址；恢复公网解析后需重新配置 GitHub SSH 密钥并推送。
+
+## Git 检查点
+
+- 当前检查点：`c9d2b7a refactor: reorganize runtime by domain boundaries`。
+- 检查点内容：删除旧 Runtime、evaluation、ingestion 和历史文档；按领域边界迁移到 `src/`；收敛顶层入口和命令。
+- 远程状态：本地 `main` 比 `origin/main` 领先 1 个提交，尚未推送。
+- 完整检查点历史：`git log --oneline --decorate`；不要在 Markdown 中复制 commit 历史。
+
+## 验证记录
+
+| 时间 | 命令或范围 | 结果 | 边界 |
+|---|---|---|---|
+| 2026-08-31 | `make compile PYTHON=python3.11` | 通过 | 仅验证语法编译 |
+| 2026-08-31 | `PYTHONPATH=src python3.11 -m unittest tests.test_env -v` | 3/3 通过 | 仅环境解析测试 |
+| 2026-08-31 | `make test PYTHON=python3.11` | 阻塞 | 缺少 `pydantic`、`fastapi`、`httpx` 等项目依赖 |
+| 2026-08-31 | `make lint` | 阻塞 | Ruff 未安装 |
+| 2026-08-31 | `git diff --check` | 通过 | 仅空白与补丁格式检查 |
+
 ## 已实现
 
 - FastAPI Web/SSE 聊天入口和健康检查。
@@ -22,6 +44,7 @@
 
 - 没有依赖锁文件和可在本地完整复现的项目环境。
 - 当前没有 ingestion/evaluation 包、固定产品评测集、浏览器 E2E、性能基线、金额计算器、文书生成或 MCP 集成。
+- `docs/features.json` 已定义 Feature 清单与三层终止校验契约，但 `ConversationHarness` 尚未实现清单读取、验证执行或状态写回；不得将其视为已自动门禁。
 
 ## 当前重点
 
@@ -34,6 +57,12 @@
 | P1 | 分离租赁押金特定逻辑与可复用 TaskBoard 机制 | 小而稳定的接口、租赁与非租赁行为测试 |
 | P1 | 产品契约重新确认后再建立固定 MVP 评测集 | 版本化 fixture、确定性门禁、Trace 覆盖和指标边界 |
 | P2 | 加入 lint/type-check 并纳入 `make check` | 可复现配置和当前代码树零错误输出 |
+
+## 交接下一步
+
+1. 完成 GitHub SSH 密钥配置，确认 `git ls-remote origin` 可用后推送 `c9d2b7a`。
+2. 核对 `.gitignore` 中删除 `chroma_db/` 忽略规则的意图，再决定是否提交。
+3. 建立可复现依赖定义，在干净 Python 3.11 环境运行完整测试和 lint。
 
 ## 阻塞
 
