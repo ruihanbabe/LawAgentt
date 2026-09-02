@@ -1,4 +1,574 @@
 {
   "format_version": 2,
-  "features": []
+  "_source_note": "本清单基于 2026-09-01 需求与架构复核会话的全部决策产出（详见 DECISIONS.md、docs/product/requirements.md §14-§21、docs/architecture/scenario-pack-and-streaming-design.md）。每项 Feature 的 verification 命令为草案，Codex 在实现阶段可根据实际测试文件命名调整，但三层验证的层级含义（static/runtime/system）不可跳过或合并。",
+  "_recommended_order_note": "已转正为各Feature的 depends_on 字段（见下），本字段保留仅作历史说明：原则上 F01/F02 最先完成；F03/F05/F06/F07/F16/F17 依赖 F01；F18 应先于或同步 F17 完成；F09/F10、F20/F21 相对独立可并行；F11/F12/F14 依赖 F01-F08 基本完成后再做；F15 任何阶段可插入。",
+  "_shared_schema_note": "EscalationRequest/EscalationReasonCode/TaskIntent 的正式Pydantic字段定义见 docs/architecture/scenario-pack-and-streaming-design.md §9（2026-09-01追加，DECISIONS.md同步记录），不再是文字提示：EscalationRequest在F18定义一次，F19（ReviewAgent安全复查升级）import复用同一模型，不得重新声明同名但字段不同的模型；Scheduler产出物类型只能是TaskIntent或EscalationRequest二选一，TaskIntent只含required_capability能力标签，不得引用具体Agent类名/实例，交由现有_select_agent()竞价机制按confidence选出具体执行者——两层是流水线上下游关系，_select_agent()现有逻辑不做任何改动。",
+  "features": [
+    {
+      "id": "F01",
+      "behavior": "定义 ScenarioPack Protocol 接口（required_fact_keys/amount_calculation_items/is_amount_item_applicable/is_out_of_scope/extract_facts/action_templates），并实现押金纠纷 ScenarioPack，内容对齐 docs/product/requirements.md 定稿的准入清单、金额项目清单、排除范围判断",
+      "depends_on": [],
+      "context_refs": {
+        "decisions": [
+          "D04",
+          "D05",
+          "D07",
+          "D10",
+          "D11"
+        ],
+        "architecture_sections": [
+          "1.1",
+          "1.2",
+          "1.3",
+          "1.4",
+          "1.5",
+          "1.6"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_scenario_pack -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_scenario_pack_deposit_e2e -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F02",
+      "behavior": "实现一个极简占位 ScenarioPack（同一 Protocol 的另一份实现），并验证切换 ScenarioPack 后 Runtime/Safety/DeliveryGate 代码零改动即可跑通完整一轮对话",
+      "depends_on": [
+        "F01"
+      ],
+      "context_refs": {
+        "decisions": [
+          "D04"
+        ],
+        "architecture_sections": [
+          "1.5"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_placeholder_scenario_pack -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_scenario_pack_switch_e2e -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F03",
+      "behavior": "UnderstandingAgent 重构：移除硬编码的 _questions 字典、关键词匹配逻辑与 intent 字符串，改为调用注入的 ScenarioPack.required_fact_keys()/extract_facts()/is_out_of_scope()；准入清单补充押金金额字段",
+      "depends_on": [
+        "F01"
+      ],
+      "context_refs": {
+        "decisions": [
+          "D11",
+          "D12"
+        ],
+        "architecture_sections": [
+          "1.7"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_understanding_agent -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_delivery_gate_e2e -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F04",
+      "behavior": "SufficiencyState/SufficiencyDecision 扩展：追问上限从 2 改为 4（由配置注入，不再是类定义字面量），新增独立于追问轮次配额之外的\"意图确认\"状态与选项式确认流程",
+      "depends_on": [],
+      "context_refs": {
+        "decisions": [
+          "D07"
+        ],
+        "architecture_sections": [
+          "1.1"
+        ],
+        "requirements_sections": [
+          "4",
+          "15.1",
+          "15.2"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_sufficiency_state -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_intent_confirmation_e2e -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F05",
+      "behavior": "RetrievalAgent 检索 query 前缀改为从 ScenarioPack 提供的检索提示读取，移除硬编码的\"住宅租赁 押金返还\"场景字符串",
+      "depends_on": [
+        "F01"
+      ],
+      "context_refs": {
+        "decisions": [
+          "D11"
+        ],
+        "architecture_sections": [
+          "1.7"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_retrieval_agent -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_qdrant_runtime_tools -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F06",
+      "behavior": "AnalysisAgent 新增金额计算框架生成逻辑：调用 ScenarioPack.amount_calculation_items()/is_amount_item_applicable() 生成适用项目+法条依据的计算框架（不给精确数字）；移除硬编码的押金专属兜底文案",
+      "depends_on": [
+        "F01"
+      ],
+      "context_refs": {
+        "decisions": [
+          "D07",
+          "D11"
+        ],
+        "architecture_sections": [
+          "1.7"
+        ],
+        "requirements_sections": [
+          "16"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_analysis_agent -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_delivery_gate_e2e -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F07",
+      "behavior": "ResponseAgent 重构：移除对 UnderstandingAgent._questions 的直接引用（改为通过 Context/Artifact 获取），四段行动建议改为调用 ScenarioPack.action_templates() 按条件选择模板，不再使用固定字符串",
+      "depends_on": [
+        "F01"
+      ],
+      "context_refs": {
+        "decisions": [
+          "D11",
+          "D12"
+        ],
+        "architecture_sections": [
+          "1.7",
+          "1.8",
+          "1.9"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_response_agent -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_delivery_gate_e2e -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F08",
+      "behavior": "FinalResponseSections 补全：新增 amount_items（金额项目框架）与 document_draft_points（文书要点整理）字段；修复 landlord_reason_analysis 字段缺失赋值路径的问题",
+      "depends_on": [
+        "F06",
+        "F07"
+      ],
+      "context_refs": {
+        "decisions": [
+          "D11"
+        ],
+        "architecture_sections": [
+          "1.7"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_final_response -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_delivery_gate_e2e -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F09",
+      "behavior": "PostgreSQL 持久化适配迁移改造（非从零实现）：现有 PostgresConversationRepository 为同步 psycopg 风格、无连接池、整体 JSONB 打包存储；改造为 SQLAlchemy 异步引擎（asyncpg 驱动，带连接池），并将 Trace 表结构从整体 JSONB 改为关键筛选字段独立列（status/decision/delivery_approved/total_cost_usd/total_latency_ms）+ 其余细节 JSONB 的混合结构，服从 Persistence 模块既有端口语义",
+      "depends_on": [],
+      "context_refs": {
+        "decisions": [
+          "D06",
+          "D13"
+        ],
+        "architecture_sections": []
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_persistence_adapters -v",
+        "system": "make services-smoke"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F10",
+      "behavior": "Redis 持久化适配迁移改造（非从零实现）：现有 RedisUserProfileStore 为同步 redis-py client；改造为原生 redis.asyncio client，保持既有 key 结构和 TTL 语义不变",
+      "depends_on": [],
+      "context_refs": {
+        "decisions": [
+          "D06",
+          "D13"
+        ],
+        "architecture_sections": []
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_persistence_adapters -v",
+        "system": "make services-smoke"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F11",
+      "behavior": "TaskBoardRuntime 增加可选 event_sink 回调参数，在 board.append_event() 后同步触发；六角色进度里程碑事件（TASK_STARTED/TASK_COMPLETED 等）显式标记 EventVisibility.USER，其余保持 DEVELOPER",
+      "depends_on": [],
+      "context_refs": {
+        "decisions": [
+          "D09"
+        ],
+        "architecture_sections": [
+          "2.1",
+          "2.2",
+          "2.3"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_taskboard_runtime -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_trace_operations -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F12",
+      "behavior": "ConversationHarness 拆分为三段式异步编排：准备阶段（PII处理+create_run/append_history，异步await）；Runtime执行阶段（仅runtime.run()通过asyncio.to_thread放入后台线程，event_sink经队列实时转发USER可见事件到SSE前端）；收尾阶段（save_blackboard/save_trace/append_agent_message/append_history，异步await，且save_trace失败仍需阻断本轮交付，保留TracePersistenceError语义）。替换现有sse.py中\"跑完再切片\"的伪流式实现",
+      "depends_on": [
+        "F11"
+      ],
+      "context_refs": {
+        "decisions": [
+          "D09",
+          "D14"
+        ],
+        "architecture_sections": [
+          "2.2"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_api_sse -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_http_e2e -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F13",
+      "behavior": "建立三层测试环境边界：单元测试复用 Port/Adapter 模式的内存 Fake（不连网络）；模块测试连远程真实 Redis/PostgreSQL 但使用独立命名空间隔离；模块间耦合测试连全链路真实服务（含真实 GLM，需用户明确授权后执行）",
+      "depends_on": [],
+      "context_refs": {
+        "decisions": [
+          "D06"
+        ],
+        "architecture_sections": []
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "make test PYTHON=python3.11",
+        "system": "make services-smoke && make test-e2e"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F14",
+      "behavior": "实现 HookDispatcher（Observer模式，只读通知不可干预流程）作为 TaskBoardRuntime.event_sink 的实际载体，支持多订阅者按 EventVisibility 过滤；为外部审计/监管平台预留订阅接口，转发通过独立缓冲队列与 Runtime 同步执行路径解耦，不接入真实外部平台（MVP阶段仅预留接口）",
+      "depends_on": [
+        "F11"
+      ],
+      "context_refs": {
+        "decisions": [
+          "D16"
+        ],
+        "architecture_sections": [
+          "3"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_hook_dispatcher -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_taskboard_runtime -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F15",
+      "behavior": "实现匿名 Token 哈希验证机制：服务端只保存 Token Hash，校验请求中的 user_id/token 与已绑定会话的关系，替换现有\"客户端传什么就信什么\"的裸字符串处理方式（对齐 docs/product/requirements.md §9）",
+      "depends_on": [],
+      "context_refs": {
+        "decisions": [
+          "D15"
+        ],
+        "architecture_sections": [
+          "4"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_session_auth -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_http_e2e -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F16",
+      "behavior": "SafetyAgent 风险分级改造为四级（LOW/MEDIUM/HIGH/CRITICAL）：扩展硬编码检测词表覆盖公共安全类信号并区分CRITICAL（自伤/大规模暴力）与HIGH（用户遭受人身威胁）；CRITICAL触发时创建安抚劝诫路由任务（跳过Understanding/Retrieval/Analysis但仍需经过Review/DeliveryGate）；新增跨轮次趋势判断读取board.blackboard.risk_assessments历史；recommended_action字段需被ResponseAgent/FinalResponseSections实际读取展示。词表（critical_markers/high_markers）由Codex在本Feature实现时直接生成初版，设计阶段不预先给出候选清单（2026-09-01定稿，见DECISIONS.md）",
+      "depends_on": [
+        "F01"
+      ],
+      "context_refs": {
+        "decisions": [
+          "D17",
+          "D24"
+        ],
+        "architecture_sections": [
+          "5"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_safety_agent -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_delivery_gate_e2e -v",
+        "acceptance_precondition": "Codex生成的初版critical_markers/high_markers词表必须经人工复核并签字确认后，方可视为本Feature验收通过；不得默认生成即可用"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F17",
+      "behavior": "实现独立调度Agent角色：LLM判断入口前新增确定性快速路径——intake必填事实（ScenarioPack.required_fact_keys(\"intake\")）未全部进入confirmed_facts时，直接返回TaskIntent(required_capability=\"understanding\")，不调用LLM，与Safety永远第一个执行同一原则（见docs/architecture/scenario-pack-and-streaming-design.md §10.1）；快速路径范围严格限定到intake事实充分+意图确认完成为止，不得扩大；过此范围后才监听ScenarioPack声明的Blackboard触发字段变化，调用LLM判断下一步应调度的能力角色，通过现有TaskBoardRuntime任务创建机制生成BoardTask；ScenarioPack接口新增dispatch_trigger_fields()方法",
+      "depends_on": [
+        "F01",
+        "F18"
+      ],
+      "context_refs": {
+        "decisions": [
+          "D18",
+          "D23",
+          "D25"
+        ],
+        "architecture_sections": [
+          "6",
+          "9.2",
+          "10.1"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_scheduler_agent -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_taskboard_runtime -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F18",
+      "behavior": "实现调度层循环防护与预算/升级机制（借鉴ADR-0002，阈值为初始草案值需真实场景校准）：动作指纹SHA256循环检测（5条窗口连续3次相同/无进展3连/短周期重复/相同错误3连）；能力角色升级不转派，返回本Feature正式定义的EscalationRequest（含EscalationReasonCode枚举，字段结构见docs/architecture/scenario-pack-and-streaming-design.md §9.1，此处为唯一定义点，供F19 import复用）；Scheduler产出物类型为TaskIntent（§9.2，只含能力标签不指定Agent实例）或EscalationRequest二选一，TaskIntent交由现有_select_agent()竞价机制分配具体执行者，_select_agent()逻辑不改动；Node/Task/Run三层预算单调累积；默认maxHandoffs=3，到限后一次兜底合并重规划；循环触发或预算耗尽时原子终止（取消调用/标记终止/写入事件/释放资源/控制权交还调度Agent）",
+      "depends_on": [],
+      "context_refs": {
+        "decisions": [
+          "D18",
+          "D22",
+          "D26"
+        ],
+        "architecture_sections": [
+          "6.3",
+          "9.1",
+          "10.2"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_loop_guard -v  # 覆盖：(1) Fake ModelProvider返回完整包装格式JSON的响应解析测试 (2) Fake CandidateGenerator持续返回相同决策的循环检测确定性测试，均不连网络",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_scheduler_agent -v",
+        "coupling_authorized_only": "连真实GLM验证Scheduler真实判断质量（是否在该升级/终止时做出正确决策），执行前需按AGENTS.md获得用户明确授权，不得在常规CI中默认运行"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F19",
+      "behavior": "ReviewAgent独立性增强：放宽ContextRolePolicy允许更完整的Blackboard可见性（具体新增字段/Artifact类型在实现阶段列出）；新增安全复查升级能力，直接import F18定义的EscalationRequest/EscalationReasonCode模型，不得重新声明同名但字段不同的模型；实际是否重新调度SafetyAgent由Scheduler决定，不由ReviewAgent自行决定",
+      "depends_on": [
+        "F18"
+      ],
+      "context_refs": {
+        "decisions": [
+          "D19",
+          "D22"
+        ],
+        "architecture_sections": [
+          "7.1",
+          "9.1"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_review_agent -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_delivery_gate_e2e -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F20",
+      "behavior": "拆分MemoryService（数据流层，确定性存储/压缩/淘汰规则）：迁移现有错误位于src/api/sse.py的sliding_window_context_manager到正确归属；扩展ContextService.build()新增读取MemoryService已管理数据的环节（纯只读取数，不做二次判断）",
+      "depends_on": [],
+      "context_refs": {
+        "decisions": [
+          "D20"
+        ],
+        "architecture_sections": [
+          "7.3"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_memory_service -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_context_service -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    },
+    {
+      "id": "F21",
+      "behavior": "ContextService新增RAG补洞调用能力：Memory无法满足信息需求时，直接同步调用现有SearchCasesAdapter/SearchStatutesAdapter（经ToolExecutor，不绕过），确定性拼接查询（不引入LLM）；每次调用必须产出正式RAG_EVIDENCE_BUNDLE Artifact（完整producer_agent/task_id/evidence_refs）写入board.artifacts，不得省略，以保持DeliveryGate证据链检查不受影响",
+      "depends_on": [
+        "F20"
+      ],
+      "context_refs": {
+        "decisions": [
+          "D21"
+        ],
+        "architecture_sections": [
+          "8"
+        ]
+      },
+      "verification": {
+        "static": "make compile PYTHON=python3.11",
+        "runtime": "PYTHONPATH=src python3.11 -m unittest tests.test_context_service -v",
+        "system": "PYTHONPATH=src python3.11 -m unittest tests.test_delivery_gate_e2e -v"
+      },
+      "state": "planned",
+      "evidence": {
+        "static": null,
+        "runtime": null,
+        "system": null
+      }
+    }
+  ],
+  "_depends_on_note": "2026-09-01 新增：Feature 数据契约从 id/behavior/verification/state/evidence 五字段扩展为六字段，新增 depends_on: list[str]（直接依赖的Feature id，无依赖为空数组）。docs/development/DEVELOPMENT.md 已同步更新为六字段契约，并新增按 depends_on 的拓扑选择与受限并行 active 规则（见该文件）。",
+  "_context_refs_note": "2026-09-01 新增 context_refs 字段（decisions: DECISIONS.md 中对应决策的稳定ID，architecture_sections: docs/architecture/scenario-pack-and-streaming-design.md 对应章节号，requirements_sections: 可选，docs/product/requirements.md 对应章节号，§14 起为该次会话新增定稿章节，§1-§13 为原有章节）。实现某个 Feature 时，只应读取该 Feature 自己的条目 + context_refs 指向的具体决策/章节 + 其 depends_on 指向的 Feature 条目，不得整份读取 DECISIONS.md/架构文档/requirements 全文——DECISIONS.md 每条决策标题行末尾已加 `<!-- id: Dxx -->` 锚点，可用 grep 精确定位到该决策的起始行，读取范围为该行到下一条 `## ` 标题之前；架构文档章节号对应文档内 `## N.` / `### N.M` 标题，同样按章节定位读取，不读全文。此机制类比项目自身 ContextRolePolicy 的角色级上下文投影原则，详见 DECISIONS.md D10、D11 记录的\"上下文最小化投影\"精神。"
 }

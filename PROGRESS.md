@@ -14,13 +14,15 @@
 
 ## 验证记录
 
-| 时间 | 命令或范围 | 结果 | 边界 |
-|---|---|---|---|
-| 2026-08-31 | `make compile PYTHON=python3.11` | 通过 | 仅验证语法编译 |
-| 2026-08-31 | `PYTHONPATH=src python3.11 -m unittest tests.test_env -v` | 3/3 通过 | 仅环境解析测试 |
-| 2026-08-31 | `make test PYTHON=python3.11` | 阻塞 | 缺少 `pydantic`、`fastapi`、`httpx` 等项目依赖 |
-| 2026-08-31 | `make lint` | 阻塞 | Ruff 未安装 |
-| 2026-08-31 | `git diff --check` | 通过 | 仅空白与补丁格式检查 |
+| 时间 | 命令或范围 | 结果 | 边界 | 失败原因 | 修复动作 |
+|---|---|---|---|---|---|
+| 2026-08-31 | `make compile PYTHON=python3.11` | 通过 | 仅验证语法编译 | — | — |
+| 2026-08-31 | `PYTHONPATH=src python3.11 -m unittest tests.test_env -v` | 3/3 通过 | 仅环境解析测试 | — | — |
+| 2026-08-31 | `make test PYTHON=python3.11` | 阻塞 | 缺少 `pydantic`、`fastapi`、`httpx` 等项目依赖 | 依赖未安装，本地环境不可复现 | 待建立可复现依赖定义/锁文件后重跑（见「当前重点」P0） |
+| 2026-08-31 | `make lint` | 阻塞 | Ruff 未安装 | Lint 工具未纳入依赖 | 待加入 lint 工具并纳入 `make check`（见「当前重点」P2） |
+| 2026-08-31 | `git diff --check` | 通过 | 仅空白与补丁格式检查 | — | — |
+
+新增记录必须同时填写「失败原因」与「修复动作」两列；`阻塞`/`失败` 结果不得留空这两列。跨 Feature 的自动修复达到单阶段 3 次上限后，在此表标注升级报告位置（`EscalationRequest`，见 [`docs/architecture/scenario-pack-and-streaming-design.md`](docs/architecture/scenario-pack-and-streaming-design.md) §9.1），不得继续自行重试。
 
 ## 已实现
 
