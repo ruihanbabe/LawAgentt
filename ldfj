@@ -1,0 +1,339 @@
+[1mdiff --git a/src/conversation/harness.py b/src/conversation/harness.py[m
+[1mindex 2c1c25e..cf8efb4 100644[m
+[1m--- a/src/conversation/harness.py[m
+[1m+++ b/src/conversation/harness.py[m
+[36m@@ -36,6 +36,8 @@[m [mfrom runtime.taskboard import ([m
+ from runtime.identifiers import new_id[m
+ from runtime.tools import ToolExecutor[m
+ from runtime.model_provider import ModelGateway[m
+[32m+[m[32mfrom runtime.context import ContextService[m
+[32m+[m[32mfrom scenario_pack import RentalDepositScenarioPack, ScenarioPack[m
+ [m
+ [m
+ class TracePersistenceError(RuntimeError):[m
+[36m@@ -221,10 +223,15 @@[m [mclass ConversationHarness:[m
+ def build_default_harness([m
+     tool_executor: ToolExecutor | None = None,[m
+     model_gateway: ModelGateway | None = None,[m
+[32m+[m[32m    scenario_pack: ScenarioPack | None = None,[m
+ ) -> ConversationHarness:[m
+[32m+[m[32m    pack = scenario_pack or RentalDepositScenarioPack()[m
+     registry = RuntimeRegistry()[m
+     registry.register([m
+         "taskboard-v0.1",[m
+[31m-        TaskBoardRuntime(build_default_agents(tool_executor, model_gateway)),[m
+[32m+[m[32m        TaskBoardRuntime([m
+[32m+[m[32m            build_default_agents(tool_executor, model_gateway, pack),[m
+[32m+[m[32m            context_service=ContextService(scenario_id=pack.scenario_id),[m
+[32m+[m[32m        ),[m
+     )[m
+     return ConversationHarness(registry)[m
+[1mdiff --git a/src/runtime/board_runtime.py b/src/runtime/board_runtime.py[m
+[1mindex c389eb7..ba2becd 100644[m
+[1m--- a/src/runtime/board_runtime.py[m
+[1m+++ b/src/runtime/board_runtime.py[m
+[36m@@ -4,7 +4,6 @@[m [mfrom __future__ import annotations[m
+ [m
+ from dataclasses import dataclass, field[m
+ from datetime import date[m
+[31m-import re[m
+ from typing import Any, Protocol[m
+ [m
+ from intake.blackboard import RiskAssessment, RiskLevel, SufficiencyDecision[m
+[36m@@ -17,6 +16,7 @@[m [mfrom safety.law_validity import is_law_effective_on[m
+ from runtime.model_provider import ModelGateway, ModelProfile[m
+ from runtime.identifiers import utc_now[m
+ from runtime.tools import ToolExecutor, ToolResultStatus[m
+[32m+[m[32mfrom scenario_pack import RentalDepositScenarioPack, ScenarioPack[m
+ from runtime.taskboard import ([m
+     AgentRunBoard,[m
+     Artifact,[m
+[36m@@ -506,16 +506,13 @@[m [mclass UnderstandingAgent:[m
+     role = AgentRole.INTAKE[m
+     capabilities = frozenset({"message_understanding"})[m
+     model_profile = ModelProfile.UNDERSTANDING_STRUCTURED[m
+[31m-    _questions = {[m
+[31m-        "tenancy_ended": "租赁是否已经结束，并且你是否已经交还房屋和钥匙？",[m
+[31m-        "landlord_reason": "房东给出的不退或扣除押金的具体理由是什么？",[m
+[31m-        "contract_terms": "合同对押金返还、扣款条件和返还时间有什么约定？",[m
+[31m-        "evidence": "你目前有合同、押金支付记录、交房记录或与房东的沟通记录吗？",[m
+[31m-        "event_date": "押金应返还或发生扣款争议的大致日期是什么？请尽量提供 YYYY-MM-DD。",[m
+[31m-    }[m
+[31m-[m
+[31m-    def __init__(self, candidate_generator: CandidateGenerator | None = None) -> None:[m
+[32m+[m[32m    def __init__([m
+[32m+[m[32m        self,[m
+[32m+[m[32m        candidate_generator: CandidateGenerator | None = None,[m
+[32m+[m[32m        scenario_pack: ScenarioPack | None = None,[m
+[32m+[m[32m    ) -> None:[m
+         self.candidate_generator = candidate_generator[m
+[32m+[m[32m        self.scenario_pack = scenario_pack or RentalDepositScenarioPack()[m
+ [m
+     def confidence_for(self, board: AgentRunBoard, task: BoardTask) -> float:[m
+         return 0.9 if task.task_type == "understand_message" else 0.0[m
+[36m@@ -534,32 +531,23 @@[m [mclass UnderstandingAgent:[m
+             for key, value in candidate["candidate_facts"].items():[m
+                 if isinstance(key, str) and isinstance(value, str) and key not in facts:[m
+                     board.blackboard.candidate_facts[key[:100]] = value[:1_000][m
+[31m-        if any(value in text for value in ("已退租", "已经退租", "交了钥匙", "交还钥匙", "已交房")):[m
+[31m-            facts["tenancy_ended"] = "yes"[m
+[31m-        if "没退租" in text or "还没退租" in text:[m
+[31m-            facts["tenancy_ended"] = "no"[m
+[31m-        reason_markers = ("损坏", "欠租", "欠费", "卫生", "违约", "提前退租", "不说理由")[m
+[31m-        reason = next((value for value in reason_markers if value in text), None)[m
+[31m-        if reason:[m
+[31m-            facts["landlord_reason"] = reason[m
+[31m-        if "合同" in text:[m
+[31m-            facts["contract_terms"] = "mentioned"[m
+[31m-        if any(value in text for value in ("转账", "聊天记录", "收据", "交房记录", "照片")):[m
+[31m-            facts["evidence"] = "available"[m
+[32m+[m[32m        extracted_facts = self.scenario_pack.extract_facts(text, facts)[m
+[32m+[m[32m        facts.update(extracted_facts)[m
+[32m+[m[32m        if "event_date" in extracted_facts:[m
+[32m+[m[32m            try:[m
+[32m+[m[32m                board.blackboard.event_date = date.fromisoformat(extracted_facts["event_date"])[m
+[32m+[m[32m            except ValueError:[m
+[32m+[m[32m                pass[m
+         if "不知道" in text:[m
+             for key in board.blackboard.sufficiency.missing_fact_keys:[m
+                 if key not in board.blackboard.sufficiency.unknown_to_user_fact_keys:[m
+                     board.blackboard.sufficiency.unknown_to_user_fact_keys.append(key)[m
+ [m
+[31m-        date_match = re.search(r"(?<!\d)(20\d{2}-\d{2}-\d{2})(?!\d)", text)[m
+[31m-        if date_match:[m
+[31m-            try:[m
+[31m-                board.blackboard.event_date = date.fromisoformat(date_match.group(1))[m
+[31m-                facts["event_date"] = date_match.group(1)[m
+[31m-            except ValueError:[m
+[31m-                pass[m
+[31m-[m
+[31m-        required = ["tenancy_ended", "landlord_reason", "contract_terms", "evidence", "event_date"][m
+[32m+[m[32m        required_specs = [[m
+[32m+[m[32m            spec for spec in self.scenario_pack.required_fact_keys("intake") if spec.required[m
+[32m+[m[32m        ][m
+[32m+[m[32m        required = [spec.key for spec in required_specs][m
+[32m+[m[32m        question_by_key = {spec.key: spec.description for spec in required_specs}[m
+         missing = [[m
+             key for key in required[m
+             if key not in facts and key not in board.blackboard.sufficiency.unknown_to_user_fact_keys[m
+[36m@@ -586,11 +574,16 @@[m [mclass UnderstandingAgent:[m
+             artifact_type=ArtifactType.SUFFICIENCY_ASSESSMENT,[m
+             producer_agent=self.agent_id,[m
+             content={[m
+[31m-                "intent": "residential_rental_deposit",[m
+[32m+[m[32m                "intent": self.scenario_pack.scenario_id,[m
+[32m+[m[32m                "scenario_id": self.scenario_pack.scenario_id,[m
+[32m+[m[32m                "out_of_scope": self.scenario_pack.is_out_of_scope(facts),[m
+                 "confirmed_facts": dict(facts),[m
+                 "missing_fact_keys": list(missing),[m
+                 "decision": sufficiency.decision.value,[m
+                 "question_keys": selected if 'selected' in locals() else [],[m
+[32m+[m[32m                "questions": [[m
+[32m+[m[32m                    question_by_key[key] for key in (selected if 'selected' in locals() else [])[m
+[32m+[m[32m                ],[m
+             },[m
+             confidence=0.8,[m
+         )[m
+[36m@@ -619,15 +612,19 @@[m [mclass RetrievalAgent:[m
+         self,[m
+         tool_executor: ToolExecutor | None = None,[m
+         candidate_generator: CandidateGenerator | None = None,[m
+[32m+[m[32m        scenario_pack: ScenarioPack | None = None,[m
+     ) -> None:[m
+         self.tool_executor = tool_executor[m
+         self.candidate_generator = candidate_generator[m
+[32m+[m[32m        self.scenario_pack = scenario_pack or RentalDepositScenarioPack()[m
+ [m
+     def confidence_for(self, board: AgentRunBoard, task: BoardTask) -> float:[m
+         return 0.9 if task.task_type == "retrieve_context" else 0.0[m
+ [m
+     def execute(self, board: AgentRunBoard, task: BoardTask, context: AgentContextView) -> AgentDelivery:[m
+[31m-        query = "住宅租赁 押金返还 " + " ".join(board.blackboard.confirmed_facts.values())[m
+[32m+[m[32m        query_parts = [self.scenario_pack.retrieval_query_prefix().strip()][m
+[32m+[m[32m        query_parts.extend(board.blackboard.confirmed_facts.values())[m
+[32m+[m[32m        query = " ".join(part for part in query_parts if part)[m
+         candidate = _model_candidate([m
+             self.candidate_generator, board, task, context, self.model_profile,[m
+             "生成一个简洁中文法律检索查询。不得生成数据库过滤器或任意工具名。",[m
+[36m@@ -702,8 +699,13 @@[m [mclass AnalysisAgent:[m
+     capabilities = frozenset({"evidence_analysis"})[m
+     model_profile = ModelProfile.LEGAL_ANALYSIS[m
+ [m
+[31m-    def __init__(self, candidate_generator: CandidateGenerator | None = None) -> None:[m
+[32m+[m[32m    def __init__([m
+[32m+[m[32m        self,[m
+[32m+[m[32m        candidate_generator: CandidateGenerator | None = None,[m
+[32m+[m[32m        scenario_pack: ScenarioPack | None = None,[m
+[32m+[m[32m    ) -> None:[m
+         self.candidate_generator = candidate_generator[m
+[32m+[m[32m        self.scenario_pack = scenario_pack or RentalDepositScenarioPack()[m
+ [m
+     def confidence_for(self, board: AgentRunBoard, task: BoardTask) -> float:[m
+         return 0.9 if task.task_type == "analyze_evidence" else 0.0[m
+[36m@@ -733,7 +735,7 @@[m [mclass AnalysisAgent:[m
+         if evidence_refs and law_versions_confirmed:[m
+             claims = [[m
+                 {[m
+[31m-                    "text": "押金是否应返还，需要结合合同约定、实际交房情况和房东主张的扣款依据判断。",[m
+[32m+[m[32m                    "text": "争议责任需要结合已确认事实、约定内容和有来源标识的证据判断。",[m
+                     "evidence_ids": evidence_refs,[m
+                 }[m
+             ][m
+[36m@@ -751,12 +753,34 @@[m [mclass AnalysisAgent:[m
+             claims = [][m
+             limitations = ["真实法规与案例检索没有返回可用证据"][m
+             decision = "limited_answer"[m
+[32m+[m[32m        amount_items = [][m
+[32m+[m[32m        if not self.scenario_pack.is_out_of_scope(board.blackboard.confirmed_facts):[m
+[32m+[m[32m            law_refs = [ref for ref in evidence_refs if ref.startswith("law:")][m
+[32m+[m[32m            amount_items = [[m
+[32m+[m[32m                {[m
+[32m+[m[32m                    "item_key": item.item_key,[m
+[32m+[m[32m                    "display_name": item.display_name,[m
+[32m+[m[32m                    "legal_basis_hint": item.legal_basis_hint,[m
+[32m+[m[32m                    "legal_basis_refs": law_refs,[m
+[32m+[m[32m                    "calculation_logic": item.calculation_logic,[m
+[32m+[m[32m                    "requires_user_confirmation": True,[m
+[32m+[m[32m                }[m
+[32m+[m[32m                for item in self.scenario_pack.amount_calculation_items()[m
+[32m+[m[32m                if self.scenario_pack.is_amount_item_applicable([m
+[32m+[m[32m                    item.item_key, board.blackboard.confirmed_facts[m
+[32m+[m[32m                )[m
+[32m+[m[32m            ][m
+         artifact = Artifact([m
+             run_id=board.run_id, task_id=task.task_id,[m
+             artifact_type=ArtifactType.ISSUE_ANALYSIS, producer_agent=self.agent_id,[m
+             source_artifact_ids=list(task.input_artifact_ids),[m
+             evidence_refs=evidence_refs,[m
+[31m-            content={"decision": decision, "claims": claims, "limitations": limitations},[m
+[32m+[m[32m            content={[m
+[32m+[m[32m                "decision": decision,[m
+[32m+[m[32m                "claims": claims,[m
+[32m+[m[32m                "limitations": limitations,[m
+[32m+[m[32m                "amount_items": amount_items,[m
+[32m+[m[32m            },[m
+         )[m
+         next_task = _child_task([m
+             board, task, task_type="compose_response", objective="生成证据受限回复",[m
+[36m@@ -781,8 +805,7 @@[m [mclass ResponseAgent:[m
+         sufficiency = board.blackboard.sufficiency[m
+         if sufficiency.decision == SufficiencyDecision.ASK_CLARIFICATION:[m
+             source = board.artifact(task.input_artifact_ids[0])[m
+[31m-            keys = source.content.get("question_keys", [])[m
+[31m-            questions = [UnderstandingAgent._questions[key] for key in keys][m
+[32m+[m[32m            questions = [str(item) for item in source.content.get("questions", [])][m
+             response = "为了判断是否进入法律检索，请补充：\n" + "\n".join([m
+                 f"{index}. {question}" for index, question in enumerate(questions, 1)[m
+             )[m
+[36m@@ -904,13 +927,15 @@[m [mdef _evidence_ref(item: object) -> str:[m
+ def build_default_agents([m
+     tool_executor: ToolExecutor | None = None,[m
+     model_gateway: ModelGateway | None = None,[m
+[32m+[m[32m    scenario_pack: ScenarioPack | None = None,[m
+ ) -> list[BoardAgent]:[m
+     candidates = StructuredModelRunner(model_gateway) if model_gateway is not None else None[m
+[32m+[m[32m    pack = scenario_pack or RentalDepositScenarioPack()[m
+     return [[m
+         SafetyAgent(candidates),[m
+[31m-        UnderstandingAgent(candidates),[m
+[31m-        RetrievalAgent(tool_executor, candidates),[m
+[31m-        AnalysisAgent(candidates),[m
+[32m+[m[32m        UnderstandingAgent(candidates, pack),[m
+[32m+[m[32m        RetrievalAgent(tool_executor, candidates, pack),[m
+[32m+[m[32m        AnalysisAgent(candidates, pack),[m
+         ResponseAgent(candidates),[m
+         ReviewAgent(candidates),[m
+     ][m
+[1mdiff --git a/src/runtime/context.py b/src/runtime/context.py[m
+[1mindex cb4f0c0..6b01a3b 100644[m
+[1m--- a/src/runtime/context.py[m
+[1m+++ b/src/runtime/context.py[m
+[36m@@ -157,10 +157,18 @@[m [mROLE_CONTEXT_POLICIES: dict[AgentRole, ContextRolePolicy] = {[m
+ class ContextService:[m
+     """只从显式输入构建 ContextView；Agent 不自行读取 Store。"""[m
+ [m
+[31m-    def __init__(self, *, max_chars: int = 24_000) -> None:[m
+[32m+[m[32m    def __init__([m
+[32m+[m[32m        self,[m
+[32m+[m[32m        *,[m
+[32m+[m[32m        max_chars: int = 24_000,[m
+[32m+[m[32m        scenario_id: str = "rental-deposit-v0.1",[m
+[32m+[m[32m    ) -> None:[m
+         if max_chars < 1:[m
+             raise ValueError("max_chars must be positive")[m
+[32m+[m[32m        if not scenario_id:[m
+[32m+[m[32m            raise ValueError("scenario_id must not be empty")[m
+         self.max_chars = max_chars[m
+[32m+[m[32m        self.scenario_id = scenario_id[m
+ [m
+     def build([m
+         self,[m
+[36m@@ -242,6 +250,7 @@[m [mclass ContextService:[m
+             "history": [item.model_dump(mode="json") for item in history_views],[m
+             "artifacts": [item.model_dump(mode="json") for item in artifacts],[m
+             "evidence_ids": list(dict.fromkeys(ref for item in artifacts for ref in item.evidence_refs)),[m
+[32m+[m[32m            "scenario_id": self.scenario_id,[m
+             "prompt_version": policy.prompt_version,[m
+             "policy_version": CONTEXT_POLICY_VERSION,[m
+             "allowed_tool_names": list(policy.allowed_tool_names),[m
+[36m@@ -266,6 +275,7 @@[m [mclass ContextService:[m
+             history=history_views,[m
+             artifacts=tuple(artifacts),[m
+             evidence_ids=tuple(payload["evidence_ids"]),[m
+[32m+[m[32m            scenario_id=self.scenario_id,[m
+             prompt_version=policy.prompt_version,[m
+             allowed_tool_names=policy.allowed_tool_names,[m
+             source_refs=tuple(refs),[m
+[1mdiff --git a/tests/test_delivery_gate_e2e.py b/tests/test_delivery_gate_e2e.py[m
+[1mindex f002651..66be5b0 100644[m
+[1m--- a/tests/test_delivery_gate_e2e.py[m
+[1m+++ b/tests/test_delivery_gate_e2e.py[m
+[36m@@ -139,7 +139,7 @@[m [mclass DeliveryGateSseE2ETests(unittest.IsolatedAsyncioTestCase):[m
+         with patch("api.sse.conversation_harness", harness):[m
+             frames = [item async for item in build_chat_stream([m
+                 req=ChatInput([m
+[31m-                    text="争议发生于2024-06-01，我已退租交还钥匙，房东说损坏，合同有押金条款，我有转账和聊天记录。",[m
+[32m+[m[32m                    text="争议发生于2024-06-01，我已退租交还钥匙，押金3000元，房东说损坏，合同有押金条款，我有转账和聊天记录。",[m
+                     user_id="delivery-success",[m
+                 ),[m
+                 request=ConnectedRequest(),[m
+[36m@@ -174,7 +174,7 @@[m [mclass DeliveryGateSseE2ETests(unittest.IsolatedAsyncioTestCase):[m
+         with patch("api.sse.conversation_harness", harness):[m
+             frames = [item async for item in build_chat_stream([m
+                 req=ChatInput([m
+[31m-                    text="争议发生于2024-06-01，我已退租交还钥匙，房东说损坏，合同有押金条款，我有转账和聊天记录。",[m
+[32m+[m[32m                    text="争议发生于2024-06-01，我已退租交还钥匙，押金3000元，房东说损坏，合同有押金条款，我有转账和聊天记录。",[m
+                     user_id="delivery-limited",[m
+                 ),[m
+                 request=ConnectedRequest(),[m
+[36m@@ -192,7 +192,7 @@[m [mclass DeliveryGateSseE2ETests(unittest.IsolatedAsyncioTestCase):[m
+         with patch("api.sse.conversation_harness", harness):[m
+             frames = [item async for item in build_chat_stream([m
+                 req=ChatInput([m
+[31m-                    text="争议发生于2024-06-01，我已退租交还钥匙，房东说损坏，合同有押金条款，我有转账和聊天记录。",[m
+[32m+[m[32m                    text="争议发生于2024-06-01，我已退租交还钥匙，押金3000元，房东说损坏，合同有押金条款，我有转账和聊天记录。",[m
+                     user_id="delivery-abstention",[m
+                 ),[m
+                 request=ConnectedRequest(),[m
+[1mdiff --git a/tests/test_taskboard_runtime.py b/tests/test_taskboard_runtime.py[m
+[1mindex 93c0a4d..ff5f78a 100644[m
+[1m--- a/tests/test_taskboard_runtime.py[m
+[1m+++ b/tests/test_taskboard_runtime.py[m
+[36m@@ -204,7 +204,7 @@[m [mclass HarnessTests(unittest.TestCase):[m
+         harness = self.build_harness()[m
+         first = harness.handle("房东不退租房押金", session_id="matter-session")[m
+         second = harness.handle([m
+[31m-            "争议发生于2024-06-01，我已经退租并交还钥匙，房东说房屋损坏，合同写了押金条款，我有转账和聊天记录。",[m
+[32m+[m[32m            "争议发生于2024-06-01，我已经退租并交还钥匙，押金3000元，房东说房屋损坏，合同写了押金条款，我有转账和聊天记录。",[m
+             session_id="matter-session",[m
+         )[m
+ [m
+[36m@@ -260,7 +260,7 @@[m [mclass HarnessTests(unittest.TestCase):[m
+         harness = ConversationHarness(runtime_registry)[m
+ [m
+         result = harness.handle([m
+[31m-            "争议发生于2024-06-01，我已退租交还钥匙，房东说损坏，合同有押金条款，我有转账和聊天记录。",[m
+[32m+[m[32m            "争议发生于2024-06-01，我已退租交还钥匙，押金3000元，房东说损坏，合同有押金条款，我有转账和聊天记录。",[m
+             session_id="tool-session",[m
+         )[m
+ [m

@@ -139,7 +139,7 @@ class DeliveryGateSseE2ETests(unittest.IsolatedAsyncioTestCase):
         with patch("api.sse.conversation_harness", harness):
             frames = [item async for item in build_chat_stream(
                 req=ChatInput(
-                    text="争议发生于2024-06-01，我已退租交还钥匙，房东说损坏，合同有押金条款，我有转账和聊天记录。",
+                    text="争议发生于2024-06-01，我已退租交还钥匙，押金3000元，房东说损坏，合同有押金条款，我有转账和聊天记录。",
                     user_id="delivery-success",
                 ),
                 request=ConnectedRequest(),
@@ -174,7 +174,7 @@ class DeliveryGateSseE2ETests(unittest.IsolatedAsyncioTestCase):
         with patch("api.sse.conversation_harness", harness):
             frames = [item async for item in build_chat_stream(
                 req=ChatInput(
-                    text="争议发生于2024-06-01，我已退租交还钥匙，房东说损坏，合同有押金条款，我有转账和聊天记录。",
+                    text="争议发生于2024-06-01，我已退租交还钥匙，押金3000元，房东说损坏，合同有押金条款，我有转账和聊天记录。",
                     user_id="delivery-limited",
                 ),
                 request=ConnectedRequest(),
@@ -192,7 +192,7 @@ class DeliveryGateSseE2ETests(unittest.IsolatedAsyncioTestCase):
         with patch("api.sse.conversation_harness", harness):
             frames = [item async for item in build_chat_stream(
                 req=ChatInput(
-                    text="争议发生于2024-06-01，我已退租交还钥匙，房东说损坏，合同有押金条款，我有转账和聊天记录。",
+                    text="争议发生于2024-06-01，我已退租交还钥匙，押金3000元，房东说损坏，合同有押金条款，我有转账和聊天记录。",
                     user_id="delivery-abstention",
                 ),
                 request=ConnectedRequest(),

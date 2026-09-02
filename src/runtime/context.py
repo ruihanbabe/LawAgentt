@@ -157,10 +157,18 @@ ROLE_CONTEXT_POLICIES: dict[AgentRole, ContextRolePolicy] = {
 class ContextService:
     """只从显式输入构建 ContextView；Agent 不自行读取 Store。"""
 
-    def __init__(self, *, max_chars: int = 24_000) -> None:
+    def __init__(
+        self,
+        *,
+        max_chars: int = 24_000,
+        scenario_id: str = "rental-deposit-v0.1",
+    ) -> None:
         if max_chars < 1:
             raise ValueError("max_chars must be positive")
+        if not scenario_id:
+            raise ValueError("scenario_id must not be empty")
         self.max_chars = max_chars
+        self.scenario_id = scenario_id
 
     def build(
         self,
@@ -242,6 +250,7 @@ class ContextService:
             "history": [item.model_dump(mode="json") for item in history_views],
             "artifacts": [item.model_dump(mode="json") for item in artifacts],
             "evidence_ids": list(dict.fromkeys(ref for item in artifacts for ref in item.evidence_refs)),
+            "scenario_id": self.scenario_id,
             "prompt_version": policy.prompt_version,
             "policy_version": CONTEXT_POLICY_VERSION,
             "allowed_tool_names": list(policy.allowed_tool_names),
@@ -266,6 +275,7 @@ class ContextService:
             history=history_views,
             artifacts=tuple(artifacts),
             evidence_ids=tuple(payload["evidence_ids"]),
+            scenario_id=self.scenario_id,
             prompt_version=policy.prompt_version,
             allowed_tool_names=policy.allowed_tool_names,
             source_refs=tuple(refs),

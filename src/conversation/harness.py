@@ -36,6 +36,8 @@ from runtime.taskboard import (
 from runtime.identifiers import new_id
 from runtime.tools import ToolExecutor
 from runtime.model_provider import ModelGateway
+from runtime.context import ContextService
+from scenario_pack import RentalDepositScenarioPack, ScenarioPack
 
 
 class TracePersistenceError(RuntimeError):
@@ -221,10 +223,15 @@ class ConversationHarness:
 def build_default_harness(
     tool_executor: ToolExecutor | None = None,
     model_gateway: ModelGateway | None = None,
+    scenario_pack: ScenarioPack | None = None,
 ) -> ConversationHarness:
+    pack = scenario_pack or RentalDepositScenarioPack()
     registry = RuntimeRegistry()
     registry.register(
         "taskboard-v0.1",
-        TaskBoardRuntime(build_default_agents(tool_executor, model_gateway)),
+        TaskBoardRuntime(
+            build_default_agents(tool_executor, model_gateway, pack),
+            context_service=ContextService(scenario_id=pack.scenario_id),
+        ),
     )
     return ConversationHarness(registry)

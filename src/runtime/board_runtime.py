@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-import re
 from typing import Any, Protocol
 
 from intake.blackboard import RiskAssessment, RiskLevel, SufficiencyDecision
@@ -17,6 +16,7 @@ from safety.law_validity import is_law_effective_on
 from runtime.model_provider import ModelGateway, ModelProfile
 from runtime.identifiers import utc_now
 from runtime.tools import ToolExecutor, ToolResultStatus
+from scenario_pack import RentalDepositScenarioPack, ScenarioPack
 from runtime.taskboard import (
     AgentRunBoard,
     Artifact,
@@ -506,16 +506,13 @@ class UnderstandingAgent:
     role = AgentRole.INTAKE
     capabilities = frozenset({"message_understanding"})
     model_profile = ModelProfile.UNDERSTANDING_STRUCTURED
-    _questions = {
-        "tenancy_ended": "租赁是否已经结束，并且你是否已经交还房屋和钥匙？",
-        "landlord_reason": "房东给出的不退或扣除押金的具体理由是什么？",
-        "contract_terms": "合同对押金返还、扣款条件和返还时间有什么约定？",
-        "evidence": "你目前有合同、押金支付记录、交房记录或与房东的沟通记录吗？",
-        "event_date": "押金应返还或发生扣款争议的大致日期是什么？请尽量提供 YYYY-MM-DD。",
-    }
-
-    def __init__(self, candidate_generator: CandidateGenerator | None = None) -> None:
+    def __init__(
+        self,
+        candidate_generator: CandidateGenerator | None = None,
+        scenario_pack: ScenarioPack | None = None,
+    ) -> None:
         self.candidate_generator = candidate_generator
+        self.scenario_pack = scenario_pack or RentalDepositScenarioPack()
 
     def confidence_for(self, board: AgentRunBoard, task: BoardTask) -> float:
         return 0.9 if task.task_type == "understand_message" else 0.0
@@ -534,32 +531,23 @@ class UnderstandingAgent:
             for key, value in candidate["candidate_facts"].items():
                 if isinstance(key, str) and isinstance(value, str) and key not in facts:
                     board.blackboard.candidate_facts[key[:100]] = value[:1_000]
-        if any(value in text for value in ("已退租", "已经退租", "交了钥匙", "交还钥匙", "已交房")):
-            facts["tenancy_ended"] = "yes"
-        if "没退租" in text or "还没退租" in text:
-            facts["tenancy_ended"] = "no"
-        reason_markers = ("损坏", "欠租", "欠费", "卫生", "违约", "提前退租", "不说理由")
-        reason = next((value for value in reason_markers if value in text), None)
-        if reason:
-            facts["landlord_reason"] = reason
-        if "合同" in text:
-            facts["contract_terms"] = "mentioned"
-        if any(value in text for value in ("转账", "聊天记录", "收据", "交房记录", "照片")):
-            facts["evidence"] = "available"
+        extracted_facts = self.scenario_pack.extract_facts(text, facts)
+        facts.update(extracted_facts)
+        if "event_date" in extracted_facts:
+            try:
+                board.blackboard.event_date = date.fromisoformat(extracted_facts["event_date"])
+            except ValueError:
+                pass
         if "不知道" in text:
             for key in board.blackboard.sufficiency.missing_fact_keys:
                 if key not in board.blackboard.sufficiency.unknown_to_user_fact_keys:
                     board.blackboard.sufficiency.unknown_to_user_fact_keys.append(key)
 
-        date_match = re.search(r"(?<!\d)(20\d{2}-\d{2}-\d{2})(?!\d)", text)
-        if date_match:
-            try:
-                board.blackboard.event_date = date.fromisoformat(date_match.group(1))
-                facts["event_date"] = date_match.group(1)
-            except ValueError:
-                pass
-
-        required = ["tenancy_ended", "landlord_reason", "contract_terms", "evidence", "event_date"]
+        required_specs = [
+            spec for spec in self.scenario_pack.required_fact_keys("intake") if spec.required
+        ]
+        required = [spec.key for spec in required_specs]
+        question_by_key = {spec.key: spec.description for spec in required_specs}
         missing = [
             key for key in required
             if key not in facts and key not in board.blackboard.sufficiency.unknown_to_user_fact_keys
@@ -586,11 +574,16 @@ class UnderstandingAgent:
             artifact_type=ArtifactType.SUFFICIENCY_ASSESSMENT,
             producer_agent=self.agent_id,
             content={
-                "intent": "residential_rental_deposit",
+                "intent": self.scenario_pack.scenario_id,
+                "scenario_id": self.scenario_pack.scenario_id,
+                "out_of_scope": self.scenario_pack.is_out_of_scope(facts),
                 "confirmed_facts": dict(facts),
                 "missing_fact_keys": list(missing),
                 "decision": sufficiency.decision.value,
                 "question_keys": selected if 'selected' in locals() else [],
+                "questions": [
+                    question_by_key[key] for key in (selected if 'selected' in locals() else [])
+                ],
             },
             confidence=0.8,
         )
@@ -619,15 +612,19 @@ class RetrievalAgent:
         self,
         tool_executor: ToolExecutor | None = None,
         candidate_generator: CandidateGenerator | None = None,
+        scenario_pack: ScenarioPack | None = None,
     ) -> None:
         self.tool_executor = tool_executor
         self.candidate_generator = candidate_generator
+        self.scenario_pack = scenario_pack or RentalDepositScenarioPack()
 
     def confidence_for(self, board: AgentRunBoard, task: BoardTask) -> float:
         return 0.9 if task.task_type == "retrieve_context" else 0.0
 
     def execute(self, board: AgentRunBoard, task: BoardTask, context: AgentContextView) -> AgentDelivery:
-        query = "住宅租赁 押金返还 " + " ".join(board.blackboard.confirmed_facts.values())
+        query_parts = [self.scenario_pack.retrieval_query_prefix().strip()]
+        query_parts.extend(board.blackboard.confirmed_facts.values())
+        query = " ".join(part for part in query_parts if part)
         candidate = _model_candidate(
             self.candidate_generator, board, task, context, self.model_profile,
             "生成一个简洁中文法律检索查询。不得生成数据库过滤器或任意工具名。",
@@ -702,8 +699,13 @@ class AnalysisAgent:
     capabilities = frozenset({"evidence_analysis"})
     model_profile = ModelProfile.LEGAL_ANALYSIS
 
-    def __init__(self, candidate_generator: CandidateGenerator | None = None) -> None:
+    def __init__(
+        self,
+        candidate_generator: CandidateGenerator | None = None,
+        scenario_pack: ScenarioPack | None = None,
+    ) -> None:
         self.candidate_generator = candidate_generator
+        self.scenario_pack = scenario_pack or RentalDepositScenarioPack()
 
     def confidence_for(self, board: AgentRunBoard, task: BoardTask) -> float:
         return 0.9 if task.task_type == "analyze_evidence" else 0.0
@@ -733,7 +735,7 @@ class AnalysisAgent:
         if evidence_refs and law_versions_confirmed:
             claims = [
                 {
-                    "text": "押金是否应返还，需要结合合同约定、实际交房情况和房东主张的扣款依据判断。",
+                    "text": "争议责任需要结合已确认事实、约定内容和有来源标识的证据判断。",
                     "evidence_ids": evidence_refs,
                 }
             ]
@@ -751,12 +753,34 @@ class AnalysisAgent:
             claims = []
             limitations = ["真实法规与案例检索没有返回可用证据"]
             decision = "limited_answer"
+        amount_items = []
+        if not self.scenario_pack.is_out_of_scope(board.blackboard.confirmed_facts):
+            law_refs = [ref for ref in evidence_refs if ref.startswith("law:")]
+            amount_items = [
+                {
+                    "item_key": item.item_key,
+                    "display_name": item.display_name,
+                    "legal_basis_hint": item.legal_basis_hint,
+                    "legal_basis_refs": law_refs,
+                    "calculation_logic": item.calculation_logic,
+                    "requires_user_confirmation": True,
+                }
+                for item in self.scenario_pack.amount_calculation_items()
+                if self.scenario_pack.is_amount_item_applicable(
+                    item.item_key, board.blackboard.confirmed_facts
+                )
+            ]
         artifact = Artifact(
             run_id=board.run_id, task_id=task.task_id,
             artifact_type=ArtifactType.ISSUE_ANALYSIS, producer_agent=self.agent_id,
             source_artifact_ids=list(task.input_artifact_ids),
             evidence_refs=evidence_refs,
-            content={"decision": decision, "claims": claims, "limitations": limitations},
+            content={
+                "decision": decision,
+                "claims": claims,
+                "limitations": limitations,
+                "amount_items": amount_items,
+            },
         )
         next_task = _child_task(
             board, task, task_type="compose_response", objective="生成证据受限回复",
@@ -781,8 +805,7 @@ class ResponseAgent:
         sufficiency = board.blackboard.sufficiency
         if sufficiency.decision == SufficiencyDecision.ASK_CLARIFICATION:
             source = board.artifact(task.input_artifact_ids[0])
-            keys = source.content.get("question_keys", [])
-            questions = [UnderstandingAgent._questions[key] for key in keys]
+            questions = [str(item) for item in source.content.get("questions", [])]
             response = "为了判断是否进入法律检索，请补充：\n" + "\n".join(
                 f"{index}. {question}" for index, question in enumerate(questions, 1)
             )
@@ -904,13 +927,15 @@ def _evidence_ref(item: object) -> str:
 def build_default_agents(
     tool_executor: ToolExecutor | None = None,
     model_gateway: ModelGateway | None = None,
+    scenario_pack: ScenarioPack | None = None,
 ) -> list[BoardAgent]:
     candidates = StructuredModelRunner(model_gateway) if model_gateway is not None else None
+    pack = scenario_pack or RentalDepositScenarioPack()
     return [
         SafetyAgent(candidates),
-        UnderstandingAgent(candidates),
-        RetrievalAgent(tool_executor, candidates),
-        AnalysisAgent(candidates),
+        UnderstandingAgent(candidates, pack),
+        RetrievalAgent(tool_executor, candidates, pack),
+        AnalysisAgent(candidates, pack),
         ResponseAgent(candidates),
         ReviewAgent(candidates),
     ]

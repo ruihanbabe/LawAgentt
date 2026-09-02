@@ -204,7 +204,7 @@ class HarnessTests(unittest.TestCase):
         harness = self.build_harness()
         first = harness.handle("房东不退租房押金", session_id="matter-session")
         second = harness.handle(
-            "争议发生于2024-06-01，我已经退租并交还钥匙，房东说房屋损坏，合同写了押金条款，我有转账和聊天记录。",
+            "争议发生于2024-06-01，我已经退租并交还钥匙，押金3000元，房东说房屋损坏，合同写了押金条款，我有转账和聊天记录。",
             session_id="matter-session",
         )
 
@@ -260,7 +260,7 @@ class HarnessTests(unittest.TestCase):
         harness = ConversationHarness(runtime_registry)
 
         result = harness.handle(
-            "争议发生于2024-06-01，我已退租交还钥匙，房东说损坏，合同有押金条款，我有转账和聊天记录。",
+            "争议发生于2024-06-01，我已退租交还钥匙，押金3000元，房东说损坏，合同有押金条款，我有转账和聊天记录。",
             session_id="tool-session",
         )
 
