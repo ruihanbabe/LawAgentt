@@ -13,6 +13,7 @@
 - Adapter 必须服从端口语义；数据库产品不能定义业务规则。
 - 存储的历史、画像和 Trace 保持会话隔离、删除/TTL 语义和必要的脱敏边界。
 - Conversation 经端口协调持久化；Runtime 不得直接依赖数据库客户端。
+- Trace 复用池（F22）沉淀只能来自通过 `DeliveryGate` 校验的 Run，且不得存原始用户陈述文本；范例记录允许被检索作为辅助上下文，但本模块不得提供任何把范例池内容标记/返回为 `Evidence` 的读取路径。完整设计见 [`../../docs/architecture/scenario-pack-and-streaming-design.md`](../../docs/architecture/scenario-pack-and-streaming-design.md) §11，决策依据见 `DECISIONS.md` D32。
 
 ## 修改后验证
 

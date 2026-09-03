@@ -18,8 +18,8 @@ class RentalDepositScenarioPackE2ETests(unittest.TestCase):
         self.assertEqual(facts["deposit_amount"], "3000元")
         self.assertFalse(self.pack.is_out_of_scope(facts))
         applicable = {
-            item.item_key for item in self.pack.amount_calculation_items()
-            if self.pack.is_amount_item_applicable(item.item_key, facts)
+            item.item_key for item in self.pack.claim_items()
+            if self.pack.is_claim_item_applicable(item.item_key, facts) == "applicable"
         }
         self.assertEqual(applicable, {
             "refundable_deposit_base", "deductions", "liquidated_damages",

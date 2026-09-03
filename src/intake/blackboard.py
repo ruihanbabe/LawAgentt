@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from runtime.identifiers import new_id, utc_now
 
@@ -14,12 +14,26 @@ class RiskLevel(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+    CRITICAL = "critical"
 
 
 class SufficiencyDecision(StrEnum):
     ASK_CLARIFICATION = "ask_clarification"
+    CONFIRM_INTENT = "confirm_intent"
     START_RETRIEVAL = "start_retrieval"
     DELIVER_LIMITED_RESPONSE = "deliver_limited_response"
+
+
+class ConsultationIntent(StrEnum):
+    LEGAL_BASIS = "legal_basis"
+    NEGOTIATION = "negotiation"
+    MATERIALS = "materials"
+
+
+class SufficiencyConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    max_clarification_rounds: int = Field(default=4, ge=1, le=20)
 
 
 class RiskAssessment(BaseModel):
@@ -36,12 +50,19 @@ class RiskAssessment(BaseModel):
 class SufficiencyState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    clarification_round: int = Field(default=0, ge=0, le=2)
-    max_clarification_rounds: int = 2
+    clarification_round: int = Field(default=0, ge=0)
+    max_clarification_rounds: int = Field(default_factory=lambda: SufficiencyConfig().max_clarification_rounds)
     missing_fact_keys: list[str] = Field(default_factory=list)
     asked_question_keys: list[str] = Field(default_factory=list)
     unknown_to_user_fact_keys: list[str] = Field(default_factory=list)
+    confirmed_intent: ConsultationIntent | None = None
     decision: SufficiencyDecision = SufficiencyDecision.ASK_CLARIFICATION
+
+    @model_validator(mode="after")
+    def clarification_round_within_configured_limit(self) -> SufficiencyState:
+        if self.clarification_round > self.max_clarification_rounds:
+            raise ValueError("clarification_round exceeds configured maximum")
+        return self
 
 
 class MatterBlackboard(BaseModel):

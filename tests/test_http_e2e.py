@@ -12,6 +12,9 @@ from persistence.storage import FaultInjectingConversationRepository, InMemoryCo
 from main import app
 
 
+TOKEN = "b" * 32
+
+
 def build_harness(repository=None) -> ConversationHarness:
     registry = RuntimeRegistry()
     registry.register("taskboard-v0.1", TaskBoardRuntime(build_default_agents()))
@@ -19,12 +22,14 @@ def build_harness(repository=None) -> ConversationHarness:
 
 
 class HttpStreamingE2ETests(unittest.IsolatedAsyncioTestCase):
-    async def post_chat(self, harness, *, user_id):
+    async def post_chat(self, harness, *, user_id, token=TOKEN):
         transport = httpx.ASGITransport(app=app)
         with patch.object(sse_api, "conversation_harness", harness):
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 async with client.stream(
-                    "POST", "/chat", json={"text": "房东不退押金", "user_id": user_id}
+                    "POST", "/chat", json={
+                        "text": "房东不退押金", "user_id": user_id, "token": token,
+                    }
                 ) as response:
                     body = "".join([part async for part in response.aiter_text()])
                     return response, body
@@ -48,6 +53,19 @@ class HttpStreamingE2ETests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"type": "error"', body)
         self.assertNotIn('"type": "chunk"', body)
         self.assertTrue(body.endswith("data: [DONE]\n\n"))
+
+    async def test_session_rejects_token_not_bound_to_user(self):
+        harness = build_harness()
+        first, _ = await self.post_chat(
+            harness, user_id="http-auth-bound", token="c" * 32,
+        )
+        rejected, body = await self.post_chat(
+            harness, user_id="http-auth-bound", token="d" * 32,
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(rejected.status_code, 403)
+        self.assertIn("invalid session credentials", body)
 
 
 if __name__ == "__main__":

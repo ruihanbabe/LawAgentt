@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 FinalDecision = Literal[
     "clarification_needed",
+    "intent_confirmation_needed",
     "supported_answer",
     "limited_answer",
     "constructive_abstention",
@@ -23,20 +24,45 @@ class ResponseClaim(BaseModel):
     evidence_ids: list[str] = Field(min_length=1, max_length=20)
 
 
+class AmountFrameworkItem(BaseModel):
+    """需要用户结合材料二次确认的金额项目框架，不包含最终金额。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    item_key: str = Field(min_length=1, max_length=100)
+    display_name: str = Field(min_length=1, max_length=100)
+    relief_kind: Literal["monetary", "non_monetary", "disputed_catchall"]
+    applicability: Literal["applicable", "not_applicable", "uncertain"]
+    legal_basis_hint: str = Field(min_length=1, max_length=500)
+    evidence_ids: list[str] = Field(default_factory=list)
+    calculation_logic: str = Field(min_length=1, max_length=500)
+    requires_user_confirmation: bool = True
+
+    @model_validator(mode="after")
+    def grounded_when_relevant(self) -> AmountFrameworkItem:
+        if self.applicability in {"applicable", "uncertain"} and not self.evidence_ids:
+            raise ValueError("applicable or uncertain claim item requires evidence_ids")
+        return self
+
+
 class FinalResponseSections(BaseModel):
-    """固定十段；暂时为空的段仍显式存在，避免结构随模型漂移。"""
+    """固定结构；暂时为空的段仍显式存在，避免结构随模型漂移。"""
 
     model_config = ConfigDict(extra="forbid")
 
     current_situation: list[str] = Field(default_factory=list)
     preliminary_assessment: list[str] = Field(default_factory=list)
-    landlord_reason_analysis: list[str] = Field(default_factory=list)
+    safety_guidance: list[str] = Field(default_factory=list)
+    counterparty_position_analysis: list[str] = Field(default_factory=list)
     statutes: list[str] = Field(default_factory=list)
     similar_cases: list[str] = Field(default_factory=list)
+    amount_items: list[AmountFrameworkItem] = Field(default_factory=list)
+    disputed_items: list[AmountFrameworkItem] = Field(default_factory=list)
     materials: list[str] = Field(default_factory=list)
     low_cost_communication: list[str] = Field(default_factory=list)
     formal_notice: list[str] = Field(default_factory=list)
     other_remedies: list[str] = Field(default_factory=list)
+    document_draft_points: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
 
 
@@ -51,6 +77,7 @@ class FinalResponseContent(BaseModel):
     sections: FinalResponseSections
     citation_map: dict[str, list[str]] = Field(default_factory=dict)
     source_snapshot_versions: list[str] = Field(default_factory=list)
+    action_template_condition_key: str | None = None
     limitations: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")

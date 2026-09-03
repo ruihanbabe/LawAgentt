@@ -6,8 +6,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable
 from datetime import datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -49,36 +50,110 @@ class HistoryMessage(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class TraceReuseClaimItem(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    item_key: str = Field(min_length=1)
+    applicability: Literal["applicable", "not_applicable", "uncertain"]
+    evidence_ids: tuple[str, ...] = ()
+
+
+class TraceReuseExample(BaseModel):
+    """通过门禁的 Run 摘要；不含原始陈述且不具备 Evidence 身份。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    example_id: str = Field(default_factory=lambda: new_id("example"))
+    run_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    contributor_user_id: str | None = None
+    scenario_id: str = Field(min_length=1)
+    confirmed_facts_summary: dict[str, str] = Field(default_factory=dict)
+    claim_items: tuple[TraceReuseClaimItem, ...] = ()
+    action_template_condition_key: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+@runtime_checkable
+class TraceReusePool(Protocol):
+    def save_example(self, example: TraceReuseExample) -> None | Awaitable[None]: ...
+
+    def search_examples(
+        self, scenario_id: str, facts: dict[str, str], *, limit: int = 5
+    ) -> list[TraceReuseExample] | Awaitable[list[TraceReuseExample]]: ...
+
+    def delete_examples_by_user(self, contributor_user_id: str) -> int | Awaitable[int]: ...
+
+
+class InMemoryTraceReusePool:
+    def __init__(self) -> None:
+        self.examples: dict[str, TraceReuseExample] = {}
+
+    def save_example(self, example: TraceReuseExample) -> None:
+        self.examples[example.example_id] = example.model_copy(deep=True)
+
+    def search_examples(
+        self, scenario_id: str, facts: dict[str, str], *, limit: int = 5
+    ) -> list[TraceReuseExample]:
+        if limit < 1:
+            return []
+        query_pairs = set(facts.items())
+        candidates = [item for item in self.examples.values() if item.scenario_id == scenario_id]
+        candidates.sort(
+            key=lambda item: (
+                -len(query_pairs & set(item.confirmed_facts_summary.items())),
+                -item.created_at.timestamp(),
+                item.example_id,
+            )
+        )
+        return [item.model_copy(deep=True) for item in candidates[:limit]]
+
+    def delete_examples_by_user(self, contributor_user_id: str) -> int:
+        selected = [
+            key for key, item in self.examples.items()
+            if item.contributor_user_id == contributor_user_id
+        ]
+        for key in selected:
+            del self.examples[key]
+        return len(selected)
+
+
 @runtime_checkable
 class UserProfileStore(Protocol):
     """Redis 适配器需要实现的端口。"""
 
-    def get(self, pseudonymous_user_id: str) -> UserProfile | None: ...
+    def get(self, pseudonymous_user_id: str) -> UserProfile | None | Awaitable[UserProfile | None]: ...
 
-    def upsert(self, profile: UserProfile) -> UserProfile: ...
+    def upsert(self, profile: UserProfile) -> UserProfile | Awaitable[UserProfile]: ...
 
-    def delete(self, pseudonymous_user_id: str) -> bool: ...
+    def delete(self, pseudonymous_user_id: str) -> bool | Awaitable[bool]: ...
 
 
 @runtime_checkable
 class ConversationRepository(Protocol):
     """PostgreSQL 适配器需要实现的会话、消息和 Trace 端口。"""
 
-    def create_run(self, board: AgentRunBoard) -> None: ...
+    def create_run(self, board: AgentRunBoard) -> None | Awaitable[None]: ...
 
-    def get_blackboard(self, session_id: str) -> MatterBlackboard | None: ...
+    def get_blackboard(
+        self, session_id: str
+    ) -> MatterBlackboard | None | Awaitable[MatterBlackboard | None]: ...
 
-    def save_blackboard(self, blackboard: MatterBlackboard) -> None: ...
+    def save_blackboard(self, blackboard: MatterBlackboard) -> None | Awaitable[None]: ...
 
-    def append_history(self, message: HistoryMessage) -> None: ...
+    def append_history(self, message: HistoryMessage) -> None | Awaitable[None]: ...
 
-    def append_agent_message(self, message: AgentMessage) -> None: ...
+    def append_agent_message(self, message: AgentMessage) -> None | Awaitable[None]: ...
 
-    def save_trace(self, trace: AgentRunTrace) -> None: ...
+    def save_trace(self, trace: AgentRunTrace) -> None | Awaitable[None]: ...
 
-    def list_history(self, session_id: str, *, limit: int = 20) -> list[HistoryMessage]: ...
+    def list_history(
+        self, session_id: str, *, limit: int = 20
+    ) -> list[HistoryMessage] | Awaitable[list[HistoryMessage]]: ...
 
-    def get_trace(self, run_id: str) -> AgentRunTrace | None: ...
+    def get_trace(
+        self, run_id: str
+    ) -> AgentRunTrace | None | Awaitable[AgentRunTrace | None]: ...
 
 
 class InMemoryUserProfileStore:

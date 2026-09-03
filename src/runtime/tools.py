@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from time import perf_counter
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -17,6 +17,7 @@ class ToolPermission(StrEnum):
     SEARCH_PUBLIC_LAW = "search_public_law"
     SEARCH_SANITIZED_CASES = "search_sanitized_cases"
     FETCH_CASE_EVIDENCE = "fetch_case_evidence"
+    SEARCH_TRACE_EXAMPLES = "search_trace_examples"
 
 
 class ToolResultStatus(StrEnum):
@@ -40,6 +41,19 @@ class ToolSpec(BaseModel):
     pii_policy: PIIPolicy = PIIPolicy.MASK
 
 
+class TraceReuseExampleView(BaseModel):
+    """只可进入辅助上下文，类型上明确不是 Evidence。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    example_id: str
+    scenario_id: str
+    confirmed_facts_summary: dict[str, str] = Field(default_factory=dict)
+    claim_items: tuple[dict[str, Any], ...] = ()
+    action_template_condition_key: str | None = None
+    is_evidence: Literal[False] = False
+
+
 class ToolResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -47,7 +61,7 @@ class ToolResult(BaseModel):
     trace_id: str = Field(default_factory=lambda: new_id("trace"))
     tool_name: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     status: ToolResultStatus
-    items: list[CaseEvidenceView | LawEvidenceView] = Field(default_factory=list)
+    items: list[CaseEvidenceView | LawEvidenceView | TraceReuseExampleView] = Field(default_factory=list)
     pii_blocked_count: int = Field(default=0, ge=0)
     warnings: list[str] = Field(default_factory=list)
     latency_ms: int | None = Field(default=None, ge=0)

@@ -27,6 +27,7 @@ from runtime.taskboard import (
     BoardLimits,
     BoardTask,
     EventType,
+    EventVisibility,
     RunStatus,
     TaskStatus,
 )
@@ -86,6 +87,61 @@ class EvidenceAdapter:
 
 
 class TaskBoardRuntimeTests(unittest.TestCase):
+    def test_event_sink_receives_events_and_user_milestones_are_marked(self):
+        received = []
+        agent = ClaimingAgent("agent", 1.0)
+        runtime = TaskBoardRuntime([agent], event_sink=received.append)
+        board = AgentRunBoard(sanitized_input="测试")
+        runtime.add_task(
+            board,
+            BoardTask(
+                run_id=board.run_id,
+                task_type="demo",
+                objective="测试事件出口",
+                required_capabilities=["demo"],
+                deduplication_key="demo:event-sink",
+            ),
+        )
+
+        runtime.run(board)
+
+        received_types = {event.event_type for event in received}
+        for event_type in (
+            EventType.TASK_STARTED,
+            EventType.TASK_COMPLETED,
+            EventType.DELIVERY_BLOCKED,
+            EventType.RUN_COMPLETED,
+        ):
+            self.assertIn(event_type, received_types)
+            self.assertTrue(all(
+                event.visibility == EventVisibility.USER
+                for event in received if event.event_type == event_type
+            ))
+        self.assertTrue(any(
+            event.visibility == EventVisibility.DEVELOPER for event in received
+        ))
+
+    def test_event_sink_failure_cannot_interrupt_runtime(self):
+        def failing_sink(event):
+            raise RuntimeError("observer failed")
+
+        runtime = TaskBoardRuntime([ClaimingAgent("agent", 1.0)], event_sink=failing_sink)
+        board = AgentRunBoard(sanitized_input="测试")
+        runtime.add_task(
+            board,
+            BoardTask(
+                run_id=board.run_id,
+                task_type="demo",
+                objective="测试观察者隔离",
+                required_capabilities=["demo"],
+                deduplication_key="demo:sink-failure",
+            ),
+        )
+
+        runtime.run(board)
+
+        self.assertEqual(board.status, RunStatus.FAILED)
+
     def test_higher_confidence_claim_wins_but_unreviewed_final_is_blocked(self):
         low = ClaimingAgent("agent-low", 0.4)
         high = ClaimingAgent("agent-high", 0.9)
@@ -177,7 +233,7 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(board.events[1].event_type, EventType.INPUT_SANITIZED)
         trace = harness.trace_store[board.run_id]
         self.assertEqual(trace.accepted_artifact_id, board.accepted_artifact_id)
-        self.assertEqual(len(trace.tasks), 4)
+        self.assertEqual(len(trace.tasks), 5)
         self.assertGreaterEqual(len(trace.messages), 1)
         self.assertEqual(
             harness.conversation_repository.get_trace(board.run_id).accepted_artifact_id,
@@ -188,6 +244,7 @@ class HarnessTests(unittest.TestCase):
             [
                 ArtifactType.USER_PROFILE_SNAPSHOT,
                 ArtifactType.RISK_REVIEW,
+                ArtifactType.TASK_INTENT,
                 ArtifactType.SUFFICIENCY_ASSESSMENT,
                 ArtifactType.RESPONSE_CANDIDATE,
                 ArtifactType.REVIEW_RESULT,
@@ -204,25 +261,27 @@ class HarnessTests(unittest.TestCase):
         harness = self.build_harness()
         first = harness.handle("房东不退租房押金", session_id="matter-session")
         second = harness.handle(
-            "争议发生于2024-06-01，我已经退租并交还钥匙，押金3000元，房东说房屋损坏，合同写了押金条款，我有转账和聊天记录。",
+            "境内住宅租赁争议发生于2024-06-01，我已经退租并交还钥匙，押金3000元，房东说房屋损坏，合同写了押金条款，我有转账和聊天记录。",
             session_id="matter-session",
         )
+        third = harness.handle("A", session_id="matter-session")
 
         self.assertEqual(first.board.blackboard.sufficiency.clarification_round, 1)
-        self.assertEqual(second.board.blackboard.state_version, 2)
-        self.assertEqual(len(second.board.blackboard.risk_assessments), 2)
-        self.assertEqual(second.board.blackboard.sufficiency.decision.value, "start_retrieval")
-        self.assertIn("retrieve_context", [task.task_type for task in second.board.tasks])
-        self.assertIn("有限结果", second.response)
+        self.assertEqual(second.board.blackboard.sufficiency.decision.value, "confirm_intent")
+        self.assertEqual(third.board.blackboard.state_version, 3)
+        self.assertEqual(len(third.board.blackboard.risk_assessments), 3)
+        self.assertEqual(third.board.blackboard.sufficiency.decision.value, "start_retrieval")
+        self.assertIn("retrieve_context", [task.task_type for task in third.board.tasks])
+        self.assertIn("有限结果", third.response)
 
-    def test_clarification_stops_after_two_rounds_without_repeating_questions(self):
+    def test_unknown_facts_are_not_repeated_before_intent_confirmation(self):
         harness = self.build_harness()
         first = harness.handle("房东不退租房押金", session_id="two-round-session")
         second = harness.handle(
             "我已经退租，房东说损坏，合同有押金约定。",
             session_id="two-round-session",
         )
-        third = harness.handle("我没有其他材料", session_id="two-round-session")
+        third = harness.handle("这些信息我都不知道", session_id="two-round-session")
 
         self.assertIn("交还房屋", first.response)
         self.assertNotIn("交还房屋", second.response)
@@ -230,7 +289,7 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(second.board.blackboard.sufficiency.clarification_round, 2)
         self.assertEqual(third.board.blackboard.sufficiency.clarification_round, 2)
         self.assertNotIn("请补充", third.response)
-        self.assertIn("有限结果", third.response)
+        self.assertIn("请选择本次咨询", third.response)
 
     def test_retrieval_agent_uses_tool_executor_and_response_keeps_evidence_refs(self):
         law = EvidenceAdapter(
@@ -259,10 +318,12 @@ class HarnessTests(unittest.TestCase):
         runtime_registry.register("taskboard-v0.1", TaskBoardRuntime(build_default_agents(executor)))
         harness = ConversationHarness(runtime_registry)
 
-        result = harness.handle(
-            "争议发生于2024-06-01，我已退租交还钥匙，押金3000元，房东说损坏，合同有押金条款，我有转账和聊天记录。",
+        pending = harness.handle(
+            "境内住宅租赁争议发生于2024-06-01，我已退租交还钥匙，押金3000元，房东说损坏，合同有押金条款，我有转账和聊天记录。",
             session_id="tool-session",
         )
+        self.assertIn("请选择本次咨询", pending.response)
+        result = harness.handle("A", session_id="tool-session")
 
         self.assertEqual(len(law.calls), 1)
         self.assertEqual(len(case.calls), 1)

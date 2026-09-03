@@ -128,6 +128,7 @@ def build_glm_profile_configs(*, model: str | None = None) -> list[ModelProfileC
         ModelProfile.LEGAL_ANALYSIS: 2_048,
         ModelProfile.RESPONSE_GENERATION: 2_048,
         ModelProfile.INDEPENDENT_REVIEW: 1_024,
+        ModelProfile.SCHEDULER: 1_024,
     }
     return [
         ModelProfileConfig(

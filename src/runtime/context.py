@@ -10,7 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from runtime.messages import AgentRole
 from runtime.identifiers import new_id
-from runtime.taskboard import AgentRunBoard, Artifact, ArtifactType, BoardTask
+from runtime.memory import MemoryService
+from runtime.tools import ToolExecutor
+from scenario_pack import RentalDepositScenarioPack, ScenarioPack
+from runtime.taskboard import AgentRunBoard, Artifact, ArtifactType, BoardTask, EventType
 
 
 CONTEXT_POLICY_VERSION = "context-policy-v0.1"
@@ -69,6 +72,7 @@ class AgentContextView(BaseModel):
     history: tuple[ContextHistoryMessage, ...] = ()
     artifacts: tuple[ContextArtifactView, ...] = ()
     evidence_ids: tuple[str, ...] = ()
+    auxiliary_examples: tuple[dict[str, Any], ...] = ()
     scenario_id: str = "rental-deposit-v0.1"
     prompt_version: str
     policy_version: str = CONTEXT_POLICY_VERSION
@@ -139,17 +143,40 @@ ROLE_CONTEXT_POLICIES: dict[AgentRole, ContextRolePolicy] = {
         prompt_version="response-glm-v0.1",
     ),
     AgentRole.REVIEW: ContextRolePolicy(
-        include_current_message=False,
+        include_current_message=True,
         include_confirmed_facts=True,
+        include_candidate_facts=True,
         include_disputes=True,
+        include_missing_facts=True,
+        history_limit=6,
         allowed_artifact_types=frozenset({
             ArtifactType.RESPONSE_CANDIDATE,
             ArtifactType.ISSUE_ANALYSIS,
             ArtifactType.RAG_EVIDENCE_BUNDLE,
             ArtifactType.SUFFICIENCY_ASSESSMENT,
+            ArtifactType.RISK_REVIEW,
+            ArtifactType.RETRIEVAL_PLAN,
+            ArtifactType.TASK_INTENT,
+            ArtifactType.ESCALATION_REQUEST,
         }),
         include_source_chain=True,
         prompt_version="review-glm-v0.1",
+    ),
+    AgentRole.SCHEDULER: ContextRolePolicy(
+        include_current_message=False,
+        include_confirmed_facts=True,
+        include_candidate_facts=True,
+        include_disputes=True,
+        include_missing_facts=True,
+        allowed_artifact_types=frozenset({
+            ArtifactType.SUFFICIENCY_ASSESSMENT,
+            ArtifactType.RAG_EVIDENCE_BUNDLE,
+            ArtifactType.ISSUE_ANALYSIS,
+            ArtifactType.REVIEW_RESULT,
+            ArtifactType.ESCALATION_REQUEST,
+        }),
+        include_source_chain=True,
+        prompt_version="scheduler-glm-v0.1",
     ),
 }
 
@@ -162,6 +189,9 @@ class ContextService:
         *,
         max_chars: int = 24_000,
         scenario_id: str = "rental-deposit-v0.1",
+        memory_service: MemoryService | None = None,
+        tool_executor: ToolExecutor | None = None,
+        scenario_pack: ScenarioPack | None = None,
     ) -> None:
         if max_chars < 1:
             raise ValueError("max_chars must be positive")
@@ -169,6 +199,9 @@ class ContextService:
             raise ValueError("scenario_id must not be empty")
         self.max_chars = max_chars
         self.scenario_id = scenario_id
+        self.memory_service = memory_service
+        self.tool_executor = tool_executor
+        self.scenario_pack = scenario_pack or RentalDepositScenarioPack()
 
     def build(
         self,
@@ -208,7 +241,11 @@ class ContextService:
                 str(board.blackboard.state_version),
             ))
 
-        selected_history = list(history or [])[-policy.history_limit:] if policy.history_limit else []
+        managed_history = (
+            list(self.memory_service.read(board.session_id or "", limit=policy.history_limit))
+            if self.memory_service is not None and board.session_id else list(history or [])
+        )
+        selected_history = managed_history[-policy.history_limit:] if policy.history_limit else []
         history_views = tuple(
             ContextHistoryMessage(message_id=item.message_id, role=item.role, content=item.content)
             for item in selected_history
@@ -219,6 +256,24 @@ class ContextService:
         )
 
         artifact_ids = list(task.input_artifact_ids)
+        has_evidence_input = any(
+            board.artifact(artifact_id).artifact_type == ArtifactType.RAG_EVIDENCE_BUNDLE
+            for artifact_id in artifact_ids
+        )
+        if (
+            self.tool_executor is not None
+            and role in {AgentRole.ANALYSIS, AgentRole.REVIEW}
+            and not has_evidence_input
+        ):
+            existing_fill = next((
+                item for item in board.artifacts
+                if item.task_id == task.task_id
+                and item.artifact_type == ArtifactType.RAG_EVIDENCE_BUNDLE
+                and item.producer_agent == "context-service-v0.1"
+            ), None)
+            fill = existing_fill or self._retrieve_context_hole(board, task)
+            if fill.artifact_id not in artifact_ids:
+                artifact_ids.append(fill.artifact_id)
         if policy.include_source_chain:
             cursor = 0
             while cursor < len(artifact_ids):
@@ -250,6 +305,7 @@ class ContextService:
             "history": [item.model_dump(mode="json") for item in history_views],
             "artifacts": [item.model_dump(mode="json") for item in artifacts],
             "evidence_ids": list(dict.fromkeys(ref for item in artifacts for ref in item.evidence_refs)),
+            "auxiliary_examples": [],
             "scenario_id": self.scenario_id,
             "prompt_version": policy.prompt_version,
             "policy_version": CONTEXT_POLICY_VERSION,
@@ -275,6 +331,7 @@ class ContextService:
             history=history_views,
             artifacts=tuple(artifacts),
             evidence_ids=tuple(payload["evidence_ids"]),
+            auxiliary_examples=(),
             scenario_id=self.scenario_id,
             prompt_version=policy.prompt_version,
             allowed_tool_names=policy.allowed_tool_names,
@@ -283,6 +340,58 @@ class ContextService:
             omitted_sections=tuple(omitted),
             content_hash=_hash(payload),
         )
+
+    def _retrieve_context_hole(self, board: AgentRunBoard, task: BoardTask) -> Artifact:
+        query_parts = [self.scenario_pack.retrieval_query_prefix().strip()]
+        query_parts.extend(str(value).strip() for value in board.blackboard.confirmed_facts.values())
+        query = " ".join(part for part in query_parts if part)[:1_000]
+        results: list[dict[str, Any]] = []
+        evidence_refs: list[str] = []
+        for tool_name in ("search_statutes", "search_cases"):
+            result = self.tool_executor.execute(tool_name, {"query": query, "top_k": 5})
+            item_refs = [
+                f"law:{item.chunk_id}" if hasattr(item, "chunk_id") else f"case:{item.case_id}"
+                for item in result.items
+            ]
+            evidence_refs.extend(item_refs)
+            results.append({
+                "tool_name": result.tool_name,
+                "status": result.status.value,
+                "items": [item.model_dump(mode="json") for item in result.items],
+                "evidence_refs": item_refs,
+                "warnings": list(result.warnings),
+                "latency_ms": result.latency_ms,
+                "trace_id": result.trace_id,
+            })
+        unique_refs = list(dict.fromkeys(evidence_refs))
+        for evidence_id in unique_refs:
+            if evidence_id not in board.blackboard.evidence_ids:
+                board.blackboard.evidence_ids.append(evidence_id)
+        artifact = Artifact(
+            run_id=board.run_id,
+            task_id=task.task_id,
+            artifact_type=ArtifactType.RAG_EVIDENCE_BUNDLE,
+            producer_agent="context-service-v0.1",
+            evidence_refs=unique_refs,
+            content={
+                "results": results,
+                "warnings": [warning for result in results for warning in result["warnings"]],
+                "evidence_count": len(unique_refs),
+                "is_sufficient": bool(unique_refs),
+                "retrieval_reason": "context_hole",
+            },
+            validation_status="valid" if unique_refs else "partial",
+        )
+        board.artifacts.append(artifact)
+        board.append_event(
+            EventType.ARTIFACT_CREATED,
+            actor_type="context_service",
+            actor_id="context-service-v0.1",
+            task_id=task.task_id,
+            artifact_id=artifact.artifact_id,
+            payload={"artifact_type": artifact.artifact_type.value, "reason": "context_hole"},
+        )
+        return artifact
 
 
 def _artifact_view(artifact: Artifact) -> ContextArtifactView:

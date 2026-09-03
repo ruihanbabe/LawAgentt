@@ -18,6 +18,7 @@ class ModelProfile(StrEnum):
     LEGAL_ANALYSIS = "legal_analysis"
     RESPONSE_GENERATION = "response_generation"
     INDEPENDENT_REVIEW = "independent_review"
+    SCHEDULER = "scheduler"
 
 
 class ModelErrorCode(StrEnum):

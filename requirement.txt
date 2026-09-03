@@ -2,7 +2,7 @@
 
 > 用途：记录“服务器上实际安装了什么”以及“项目准备安装什么”。
 > 本文件同时作为实际环境、目标依赖与依赖变更的人工审计台账；项目不再单独维护 `requirements.txt`。
-> 最后核对：2026-08-19（Asia/Shanghai）
+> 最后核对：2026-09-03（Asia/Shanghai）
 
 ## 当前解释器
 
@@ -55,7 +55,7 @@ export DOCKER_HOST=unix:///tmp/lawagent-docker.sock
 | 中文数字 | `cn2an` | `==0.5.24` | `0.5.24`（直接依赖；带入 `proces==0.1.7`） |
 | HTTP | `httpx` | `>=0.27.0` | `0.28.1` |
 | Redis客户端 | `redis` | `>=5,<7` | `6.4.0` |
-| PostgreSQL客户端 | `psycopg[binary]` | `>=3.1,<4` | `3.3.4` |
+| PostgreSQL客户端 | `SQLAlchemy[asyncio]`、`asyncpg` | `SQLAlchemy>=2,<3`、`asyncpg>=0.29,<1` | `2.0.51` / `0.31.0` |
 | 评估 | `ragas`、`openai`、`datasets` | 离线评测使用 | `0.4.3` / `2.53.0` / `5.0.0` |
 | 测试与质量 | `pytest`、`pytest-asyncio`、`ruff`、`mypy` | 缺失 | 未安装 |
 
@@ -81,3 +81,4 @@ export DOCKER_HOST=unix:///tmp/lawagent-docker.sock
 | 2026-08-04 | 启动 Qdrant `1.18.2` 并执行 BGE-M3 GPU 入库 | 建立法规与案例检索基线数据层 | RTX 3090；法规 66,448 points、案例 92,523 points；均为 dense 1,024 + sparse；集合在线状态 green |
 | 2026-08-06 | 核验RAGAS评测依赖 | 准备对联合检索实例做低成本LLM Judge代理评测 | `ragas==0.4.3`、`openai==2.53.0`已存在，无需安装智谱SDK；通过OpenAI兼容接口调用`glm-4.7-flash`，密钥仅使用`ZAI_API_KEY`环境变量 |
 | 2026-08-19 | 安装 Redis/PostgreSQL 持久化依赖 | 验证正式 Adapter 的真实 TTL、事务和读写语义 | `redis==6.4.0`、`psycopg[binary]==3.3.4` 安装于 agent 环境；Redis 7.4.2/PostgreSQL 16.6 容器 healthy；真实 smoke 通过 |
+| 2026-09-03 | PostgreSQL Adapter 迁移为 SQLAlchemy 异步引擎 + asyncpg | 对齐 F09 与 FastAPI 异步持久化路线，并使用连接池 | `SQLAlchemy==2.0.51` 已存在；安装 `asyncpg==0.31.0`；F09 单元与真实服务 smoke 结果见当次开发记录 |

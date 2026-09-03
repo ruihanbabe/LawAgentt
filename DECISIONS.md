@@ -175,3 +175,33 @@
 - 决策：`docs/features.json` 的 Feature 数据契约从原有 `id`/`behavior`/`verification`/`state`/`evidence` 五字段扩展为六字段，新增 `depends_on: list[str]`，取值为该 Feature 直接依赖的其他 Feature `id` 列表，无依赖则为空数组。此前用顶层 `_recommended_order_note` 自然语言提示的做法作废，具体依赖关系见本次更新后的 `docs/features.json`。
 - 原因：`_recommended_order_note` 只是临时应急，不是结构化数据，Codex 或后续工具无法按依赖关系做自动化排序/校验；转正为正式字段后，依赖关系可被程序读取和校验，且比自然语言描述更不容易在后续更新中出现遗漏或歧义。
 - 约束：本决策改动了 `docs/development/DEVELOPMENT.md` 中已定义的 Feature 五字段契约，**`DEVELOPMENT.md` 需要同步更新为六字段契约说明**（本次会话未拿到该文件内容，无法直接编辑，需要用户在合并本次改动时一并更新该文档的字段说明）；新增 Feature 时必须同时声明 `depends_on`，不得留空绕过（无依赖显式写 `[]`，不得省略该字段）。
+
+## 2026-09-03：Runtime 禁止出现具体对象身份词汇，统一"本方/对方"模型  <!-- id: D28 -->
+
+- 决策：开发过程中发现 `FinalResponseSections.landlord_reason_analysis` 等 Runtime 层拥有的字段名/兜底文案把"房东"这一具体身份焊死在了本应场景无关的类型定义里，且不限押金场景——凡是 Runtime 层（Schema 字段名、变量名、错误兜底文案、Trace 文案）出现具体对象身份词汇（"房东"/"用人单位"/"保险公司"等），均违反 D04"Runtime 六角色为通用机制层，不感知具体业务场景领域知识"的既定原则。经跨场景核对（押金纠纷 vs 劳动仲裁 vs 保险理赔 vs 民间借贷等自然人对自然人纠纷）确认：连"对方是机构"这一层假设都不成立，不能建立"对方身份类型"分类体系，只能用最抽象的"本方/对方"指称。
+- 原因：真实身份种类不可枚举（个人对个人的纠纷里对方甚至不是机构），任何一层身份分类体系都会在下一个新场景出现时被打破，与用一个纯字符串占位（由 ScenarioPack 提供具体取值）相比没有额外价值，反而增加 Runtime 层的场景耦合面。
+- 约束：Runtime 层（`src/runtime/`、`src/conversation/` 等非 ScenarioPack 目录）的代码、Pydantic 字段名、错误兜底文案、日志/Trace 文案禁止出现具体对象身份词汇，测试 fixture 与 ScenarioPack 自身文件除外；`FinalResponseSections.landlord_reason_analysis` 改名为 `counterparty_position_analysis`（具体显示文案见 D29 的 `party_labels()`）；本约束需要在 `AGENTS.md`/`docs/development/DEVELOPMENT.md` 中落地为可核查的检查项（见对应文档更新）。
+
+## 2026-09-03：采用 IRAC 对齐的四阶段宏观流程，新增显式"确认涉事双方"阶段  <!-- id: D29 -->
+
+- 决策：法律咨询流程正式确立为四个宏观阶段：① 确认涉事双方 → ② 整理准入事实 → ③ 整理涉及的权益/救济项目 → ④ 行动指南；对应法律分析的通用范式 IRAC（Issue/Rule/Application/Conclusion）——①②对应 Issue，Retrieval（检索法条/案例）对应 Rule 且维持 D21 已定的"贯穿服务、非独立串行阶段"设计不变，③对应 Application，④对应 Conclusion。①"确认涉事双方"目前在六角色实现中没有被显式建模，需要补齐：`ScenarioPack` 新增 `party_labels(facts) -> PartyLabels`（`PartyLabels` 含 `self_label`/`counterparty_label` 两个字符串字段），多数场景角色固定可忽略 `facts` 直接返回固定值；角色不对称依赖用户陈述的场景（如民间借贷不确定用户是出借人还是借款人）通过 `required_fact_keys("intake")` 声明一个角色事实字段解决，不新增独立的事实确认协议——复用既有机制，不为"确认双方"另起一套。
+- 原因：IRAC 是法律分析领域几十年验证过的通用范式，不绑定任何具体案由，采用它是用已验证框架替代自造分类体系的风险；"确认涉事双方"补齐后，六角色分工与 IRAC 四阶段一一对应，不需要新增角色或改变 Runtime 调度结构。
+- 约束：`party_labels()` 只负责渲染显示文案，不得承载任何判断逻辑；`FinalResponseSections.counterparty_position_analysis`（原 `landlord_reason_analysis`）在渲染给用户时使用 `party_labels().counterparty_label` 作为标题的一部分，字段本身与 Schema 内其余字段一样保持场景无关命名。
+
+## 2026-09-03：`amount_calculation_items` 改名为 `claim_items`，新增 `relief_kind`，权益项目改为有界目录 + 单次结构化多标签分类  <!-- id: D30 -->
+
+- 决策：`ScenarioPack.amount_calculation_items()`/`is_amount_item_applicable()` 改名为 `claim_items()`/`is_claim_item_applicable()`；`AmountItemSpec` 改名为 `ClaimItemSpec`，新增字段 `relief_kind: Literal["monetary", "non_monetary", "disputed_catchall"]` 与 `applicability_signal: str`（提示该项目值得认真核查的事实/关键词特征）。`is_claim_item_applicable()` 返回值从 `bool` 改为三态 `Literal["applicable", "not_applicable", "uncertain"]`。判断流程改为：Analysis 角色对 `claim_items()` 返回的全部条目 + 检索证据做**一次**结构化输出调用，对每一项输出三态判断，`applicable`/`uncertain` 必须绑定 `evidence_id`（复用现有 `DeliveryGate` 的 `EVIDENCE_EXISTS` 检查，不新增门禁逻辑）；不再逐项单独调用模型。押金场景现有 5 类项目内容不变，只做改名与 `relief_kind` 标注（前 4 类 `monetary`，"争议扣除项"标注为 `disputed_catchall`，具体取值见架构文档 §1.4）。
+- 原因：原设计"金额计算项目清单"把"权益"窄化为"金额"，劳动仲裁等场景存在非金钱救济（如"恢复劳动关系"），需要 `relief_kind` 区分渲染方式（`monetary` 沿用"计算框架不给精确数字"；`non_monetary` 说明适用条件和依据）。清单从"精确写死几项、不得新增"改为"ScenarioPack 按法律领域声明的有界目录，LLM 只做closed-set 多标签分类、不自由生成新类别名"，是把用户提出的"LLM 置信度判断"与"RAG case 结果整理"两个方案合成为同一机制：LLM 的判断范围由目录约束（可控），判断依据由检索证据约束（可审计），不引入无界自由生成。单次调用而非逐项调用是成本与"每 Feature 最小上下文投影"原则的直接要求。
+- 约束：`claim_items()` 返回的目录条数软上限 15–20 条，超过说明该 ScenarioPack 粒度切分有问题，应拆分场景而非扩大目录（具体拆分判断留待该 ScenarioPack 实现时确认，不在本决策展开）；新场景的目录内容产出流程复用 D24 已定的模式——Codex 在实现该 ScenarioPack 时直接起草初版，验收前人工复核签字确认，不新增单独的内容治理流程。
+
+## 2026-09-03：目录必须含至少一条 `disputed_catchall` 兜底项  <!-- id: D31 -->
+
+- 决策：每个 `ScenarioPack.claim_items()` 返回的目录**必须**至少包含一条 `relief_kind="disputed_catchall"` 的兜底项；判断为 `uncertain` 或命中 `disputed_catchall` 的项目统一汇入最终回答的"争议项"小节，不强行归类、不代替用户/法院判断。押金场景现有"争议扣除项"就是这一模式，只是此前没有被抽象为跨场景强制要求。
+- 原因：目录是"有界但可能不全"的——这是让"数量不设限"这个诉求变得安全的核心手段：某个具体情况不落在已知目录内时，必须有一个明确的"存在争议/待人工复核"去处，而不是被 LLM 强行塞进错误类别，也不是被悄悄编一个新类别名绕开"closed-set 分类"的约束（后者会退化回 D30 明确否决的自由生成模式）。
+- 约束：`ScenarioPack.claim_items()` 的实现如果不含至少一条 `disputed_catchall` 条目，视为不满足接口契约，Feature 验收时需检查此项；本约束在 `docs/features.json` 涉及 `claim_items()` 的 Feature（F01 及后续新场景 Feature）的 `verification` 中体现。
+
+## 2026-09-03：过往成功 Run 结构化沉淀为可复用范例池，但不得作为 Evidence  <!-- id: D32 -->
+
+- 决策：新增 Trace 复用池——只把**通过 `DeliveryGate` 校验**的历史 Run 结构化沉淀（问过哪些事实、命中了哪些 `claim_items` + 各自的 `evidence_id`、选用了哪个 `action_templates` 分支），存成可检索的范例库，供后续新 Run 的 Analysis 判断阶段作为辅助上下文参考"过往类似情况是怎么判断的"。检索机制复用现有 Retrieval 工具链（`ToolExecutor` + 已有的检索 Adapter 模式），不新建独立检索栈。
+- 原因：这是法律 AI 领域已有的正统技术路线（case-based reasoning），能缓解"目录判断"在冷启动阶段样本不足、边界案例难判断的问题；复用现有检索基础设施是成本最低的实现路径。
+- 约束（硬性，防止自我污染）：范例池内容**只能作为辅助判断的上下文，不得被当成 `Evidence` 引用、不得进入 `citation_map`**——扩展现有硬约束"模型记忆、搜索摘要和未核验网页不得成为最终证据"为"过往 Run 沉淀同样不得作为最终证据"；只有通过 `DeliveryGate` 校验的 Run 才能进入范例池，防止未过审内容被复用后污染后续判断；范例池的具体存储与检索设计、以及"正向结果信号"如何界定，留待对应 Feature 实现阶段细化，本决策只定基本原则和护栏。

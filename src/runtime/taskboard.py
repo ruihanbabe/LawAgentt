@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from collections.abc import Callable
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from runtime.messages import AgentMessage, AgentRole
 from intake.blackboard import MatterBlackboard
@@ -46,6 +47,8 @@ class ArtifactType(StrEnum):
     SUFFICIENCY_ASSESSMENT = "sufficiency_assessment"
     ISSUE_ANALYSIS = "issue_analysis"
     REVIEW_RESULT = "review_result"
+    TASK_INTENT = "task_intent"
+    ESCALATION_REQUEST = "escalation_request"
 
 
 class EventType(StrEnum):
@@ -82,12 +85,12 @@ class EventVisibility(StrEnum):
 class BoardLimits(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    max_rounds: int = Field(default=8, ge=1, le=100)
+    max_rounds: int = Field(default=12, ge=1, le=100)
     max_total_claims: int = Field(default=16, ge=1, le=1_000)
     max_tasks: int = Field(default=32, ge=1, le=1_000)
     max_claims_per_agent: int = Field(default=4, ge=1, le=100)
     max_claims_per_agent_per_round: int = Field(default=1, ge=1, le=10)
-    max_task_depth: int = Field(default=6, ge=0, le=20)
+    max_task_depth: int = Field(default=10, ge=0, le=20)
     max_children_per_task: int = Field(default=6, ge=1, le=100)
     max_no_progress_rounds: int = Field(default=2, ge=1, le=10)
 
@@ -192,6 +195,7 @@ class AgentRunBoard(BaseModel):
     accepted_artifact_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+    _event_sink: Callable[[CollaborationEvent], None] | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def accepted_artifact_must_exist(self) -> AgentRunBoard:
@@ -225,6 +229,12 @@ class AgentRunBoard(BaseModel):
         )
         self.events.append(event)
         self.updated_at = utc_now()
+        if self._event_sink is not None:
+            try:
+                self._event_sink(event)
+            except Exception:
+                # 事件观察者只能接收通知，不能干预 Runtime 控制流。
+                pass
         return event
 
     def task(self, task_id: str) -> BoardTask:

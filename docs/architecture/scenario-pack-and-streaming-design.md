@@ -47,11 +47,19 @@ class FactKeySpec(BaseModel):
     description: str
 
 
-class AmountItemSpec(BaseModel):
-    """单个金额计算项目的声明。"""
+class ClaimItemSpec(BaseModel):
+    """单个权益/救济项目的声明（原 AmountItemSpec，2026-09-03 泛化，见 DECISIONS.md D30）。"""
     item_key: str
     display_name: str
+    relief_kind: Literal["monetary", "non_monetary", "disputed_catchall"]
     legal_basis_hint: str  # 供 Retrieval 检索对应法条使用的提示
+    applicability_signal: str  # 提示该项目值得认真核查的事实/关键词特征，供 Analysis 结构化分类时参考
+
+
+class PartyLabels(BaseModel):
+    """本方/对方的显示称谓（2026-09-03 新增，见 DECISIONS.md D28、D29）。"""
+    self_label: str          # 如"承租人"/"劳动者"
+    counterparty_label: str  # 如"房东"/"用人单位"；自然人对自然人场景可为"对方"
 
 
 class ScenarioPack(Protocol):
@@ -60,17 +68,28 @@ class ScenarioPack(Protocol):
     def required_fact_keys(
         self, layer: Literal["intake", "analysis", "action"]
     ) -> list[FactKeySpec]:
-        """返回该层级判定"信息是否充分"所需的事实字段清单。"""
+        """返回该层级判定"信息是否充分"所需的事实字段清单。角色不对称场景
+        （如民间借贷不确定用户是出借人还是借款人）通过在 "intake" 层声明一个
+        角色事实字段解决"确认涉事双方"，不新增独立协议。"""
         ...
 
-    def amount_calculation_items(self) -> list[AmountItemSpec]:
-        """返回本场景固定的金额计算项目清单（押金场景为定稿的5类，占位场景可为空列表）。"""
+    def party_labels(self, facts: dict[str, str]) -> PartyLabels:
+        """返回本方/对方的显示称谓。多数场景角色固定，可忽略 facts 直接返回
+        固定值；角色不对称场景依据 facts 中的角色事实返回对应称谓。只负责
+        渲染显示文案，不得承载任何判断逻辑。"""
         ...
 
-    def is_amount_item_applicable(
+    def claim_items(self) -> list[ClaimItemSpec]:
+        """返回本场景的权益/救济项目有界目录（原 amount_calculation_items，
+        押金场景为定稿的5类，占位场景可为空列表）。软上限 15-20 条，超过应
+        拆分场景。必须至少包含一条 relief_kind="disputed_catchall" 的兜底项。"""
+        ...
+
+    def is_claim_item_applicable(
         self, item_key: str, facts: dict[str, str]
-    ) -> bool:
-        """给定当前已知事实，判断某金额项目是否适用。涉及条件判断，用函数而非纯配置表达。"""
+    ) -> Literal["applicable", "not_applicable", "uncertain"]:
+        """给定当前已知事实，判断某权益项目的适用性（原 is_amount_item_applicable，
+        返回值从 bool 改为三态）。涉及条件判断，用函数而非纯配置表达。"""
         ...
 
     def is_out_of_scope(self, facts: dict[str, str]) -> bool:
@@ -84,6 +103,8 @@ class ScenarioPack(Protocol):
         ...
 ```
 
+**接口重命名说明（2026-09-03）**：`amount_calculation_items()`/`is_amount_item_applicable()`/`AmountItemSpec` 已改名为 `claim_items()`/`is_claim_item_applicable()`/`ClaimItemSpec`；新增 `PartyLabels`/`party_labels()`。改名原因、`relief_kind`/三态判断/`disputed_catchall` 兜底项的完整决策依据见 `DECISIONS.md` D28–D31，产品级规则见 `docs/product/requirements.md` §22–§24。
+
 ### 1.3 接入点
 
 - `ScenarioPack` 实例作为构造参数注入 `ConversationHarness`（或其下层的 `TaskBoardRuntime`），
@@ -95,13 +116,14 @@ class ScenarioPack(Protocol):
 
 ### 1.4 押金纠纷 ScenarioPack 的具体取值（对齐 `docs/product/requirements.md`）
 
-- `amount_calculation_items()` 返回定稿的五类：应退押金基数、扣除项、违约金、逾期利息/资金占用赔偿、争议扣除项。
-- `required_fact_keys("intake")` 对应定稿的准入清单：租赁关系状态、押金金额凭证、拒退理由、书面合同情况、是否属排除范围。
+- `party_labels()` 固定返回 `self_label="承租人"`、`counterparty_label="房东"`（角色固定，忽略 `facts` 参数）。
+- `claim_items()` 返回定稿的五类：应退押金基数、扣除项、违约金、逾期利息/资金占用赔偿（以上四项 `relief_kind="monetary"`）、争议扣除项（`relief_kind="disputed_catchall"`，满足 D31 的兜底项要求）。
+- `required_fact_keys("intake")` 对应定稿的准入清单：租赁关系状态、押金金额凭证、拒退理由、书面合同情况、是否属排除范围。押金场景角色固定（`party_labels` 无需事实即可确定），此清单不需要额外的角色确认字段。
 - `is_out_of_scope()` 对应定稿的排除场景判断，命中后仍正常处理（不返回错误，只是后续不走押金专属清单）。
 
 ### 1.5 占位 ScenarioPack（可扩展性验证用）
 
-- 同一 Protocol 的另一份极简实现，`required_fact_keys` 可仅含 1-2 个字段，`amount_calculation_items` 返回空列表。
+- 同一 Protocol 的另一份极简实现，`required_fact_keys` 可仅含 1-2 个字段，`claim_items` 返回空列表，`party_labels` 返回占位称谓（如 `self_label="用户"`、`counterparty_label="对方"`）。
 - 验收标准：切换到占位 ScenarioPack 后，`TaskBoardRuntime`/`Safety`/`DeliveryGate` 代码零改动即可运行完整一轮对话。
 
 ### 1.7 抽取重构完整清单（2026-09-01 六角色核实后新增）
@@ -110,11 +132,11 @@ class ScenarioPack(Protocol):
 
 | 角色 | 需要抽取的内容 | 抽取后角色代码应变为 |
 |---|---|---|
-| `UnderstandingAgent` | `_questions` 字典（准入清单五项+需补充的押金金额项）；关键词匹配逻辑（`tenancy_ended`/`landlord_reason`/`contract_terms`/`evidence` 的判断规则）；硬编码的 `intent` 字符串；超范围场景判断（当前完全缺失，需新增） | 调用 `ScenarioPack.required_fact_keys("intake")` 获取清单；调用 `ScenarioPack.extract_facts()` 完成文本→事实抽取（角色代码本身不含任何场景专属文本匹配规则）；调用 `ScenarioPack.is_out_of_scope()` 判断 |
-| `RetrievalAgent` | 检索 query 硬编码前缀 `"住宅租赁 押金返还 "` | 前缀改为从 `ScenarioPack` 提供的检索提示（可复用已设计的 `AmountItemSpec.legal_basis_hint` 思路，或新增单独的检索提示字段） |
-| `AnalysisAgent` | 兜底文案硬编码押金专属句子；金额计算框架生成逻辑（当前完全缺失，需新增） | 兜底文案改为通用措辞或由 `ScenarioPack` 提供；新增调用 `ScenarioPack.amount_calculation_items()` + `is_amount_item_applicable()` 生成金额框架的逻辑 |
+| `UnderstandingAgent` | `_questions` 字典（准入清单五项+需补充的押金金额项）；关键词匹配逻辑（`tenancy_ended`/`landlord_reason`/`contract_terms`/`evidence` 的判断规则）；硬编码的 `intent` 字符串；超范围场景判断（当前完全缺失，需新增）；"确认涉事双方"未显式建模（当前完全缺失，需新增，见 §1.10） | 调用 `ScenarioPack.required_fact_keys("intake")` 获取清单；调用 `ScenarioPack.extract_facts()` 完成文本→事实抽取（角色代码本身不含任何场景专属文本匹配规则）；调用 `ScenarioPack.is_out_of_scope()` 判断；角色不对称场景下把角色事实并入准入清单判断（不新增独立流程） |
+| `RetrievalAgent` | 检索 query 硬编码前缀 `"住宅租赁 押金返还 "` | 前缀改为从 `ScenarioPack` 提供的检索提示（可复用已设计的 `ClaimItemSpec.legal_basis_hint` 思路，或新增单独的检索提示字段） |
+| `AnalysisAgent` | 兜底文案硬编码押金专属句子；权益项目判断逻辑（当前完全缺失，需新增） | 兜底文案改为通用措辞或由 `ScenarioPack` 提供；新增调用 `ScenarioPack.claim_items()` + 对全部条目做**一次**结构化多标签分类调用（三态判断，绑定 `evidence_id`），生成计算框架/适用说明的逻辑，机制见 §1.2、`docs/product/requirements.md` §24 |
 | `ResponseAgent` | 对 `UnderstandingAgent._questions` 的直接引用（角色间硬耦合）；`_final_response_content()` 中四段固定字符串（`materials`/`low_cost_communication`/`formal_notice`/`other_remedies`） | 改为通过 Context/Artifact 获取清单（不直接引用其他角色内部状态）；四段建议内容改为基于当前案件事实动态生成或至少由 `ScenarioPack` 提供模板化取值，而非全局固定字符串 |
-| `FinalResponseSections` | `landlord_reason_analysis` 字段定义了但无赋值路径（死字段）；缺失 `amount_items`、`document_draft_points` 两个字段 | 补全缺失字段；`_final_response_content()` 需要真正填充 `landlord_reason_analysis` |
+| `FinalResponseSections` | `landlord_reason_analysis` 字段把具体身份词写死在场景无关的 Schema 里（违反 D28）；缺失 `amount_items`、`document_draft_points` 两个字段 | 字段改名为 `counterparty_position_analysis`（场景无关命名，渲染时用 `party_labels().counterparty_label` 拼标题）；补全缺失字段（`amount_items` 涵盖 `monetary`/`non_monetary` 两类结果，含 `disputed_catchall` 项汇总的"争议项"小节）；`_final_response_content()` 需要真正填充该字段 |
 
 **范围澄清**：`SafetyAgent`、`ReviewAgent` 场景无关，本次抽取重构不涉及这两个角色。
 
@@ -148,6 +170,29 @@ class ScenarioPack(Protocol):
 `ResponseAgent._final_response_content()` 改为调用 `ScenarioPack.action_templates(facts)` 获取
 四段内容，不再使用当前代码里的固定字符串。具体模板条件分支（覆盖哪些缺失材料/争议焦点组合）
 留待 ScenarioPack 具体实现阶段设计，本文档不展开。
+
+### 1.10 "确认涉事双方"阶段设计（2026-09-03 新增，见 DECISIONS.md D28、D29）
+
+**背景**：开发过程中发现 `FinalResponseSections.landlord_reason_analysis` 等 Runtime 层字段把"房东"焊死为具体身份，且六角色实现里从未显式建模"确认涉事双方"这一步——这是跨场景扩展（劳动仲裁、保险理赔、民间借贷等自然人对自然人纠纷）时最先暴露的耦合点。
+
+**设计**：
+- 不新增独立协议或独立角色。`party_labels(facts) -> PartyLabels`（见 §1.2）提供显示称谓；多数场景角色固定（如押金场景），`UnderstandingAgent` 无需额外动作即完成"确认双方"（称谓在 `ScenarioPack` 静态声明时已确定）。
+- 角色不对称场景（用户可能是纠纷中的任一方，如民间借贷的出借人/借款人）：`required_fact_keys("intake")` 声明一个角色事实字段（如 `key="user_role"`），`UnderstandingAgent` 按现有准入事实收集流程一并处理，不新增专门的"确认双方"子流程或状态机。`party_labels()` 读取该事实决定返回哪一组称谓。
+- 影响面：`FinalResponseSections.landlord_reason_analysis` 改名为 `counterparty_position_analysis`（见 §1.7 表格），渲染时用 `party_labels(facts).counterparty_label` 拼接标题（如"房东主张分析"/"用人单位主张分析"）；`Response`/`Review` 角色不需要感知具体称谓内容，只处理结构化字段。
+- 范围边界：`party_labels()` 只负责渲染，不参与 `DeliveryGate` 校验、不影响证据链逻辑，改造成本低、风险面小。
+
+### 1.11 四阶段宏观流程与 IRAC 对齐（2026-09-03 新增）
+
+产品级定义见 `docs/product/requirements.md` §23。架构层面的对应关系：
+
+| 宏观阶段 | 对应角色/机制 | 备注 |
+|---|---|---|
+| ① 确认涉事双方 | `UnderstandingAgent` 调用 `party_labels()`（见 §1.10） | 多数场景在 ScenarioPack 声明时已固定，运行时零额外开销 |
+| ② 整理准入事实 | `UnderstandingAgent` + `RetrievalAgent`（检索作为贯穿服务，非独立阶段，维持 D21 既有设计） | `required_fact_keys("intake")` 数量不设上限，按场景确定 |
+| ③ 整理权益/救济项目 | `AnalysisAgent` 对 `claim_items()` 做单次结构化多标签分类（见 §1.2、§1.7） | 目录有界（软上限 15-20），分类候选范围可控 |
+| ④ 行动指南 | `ResponseAgent` 调用 `action_templates()`（见 §1.9） | 条件化模板选择，不自由生成 |
+
+四阶段不改变现有六角色（含 Scheduler）的调度结构——阶段是产品语义层面的分组，不是 Runtime 新增的调度概念，`TaskBoardRuntime`/`Scheduler` 代码不需要感知"当前处于第几阶段"。
 
 ---
 
@@ -591,4 +636,33 @@ def _intake_facts_confirmed(board: TaskBoard, scenario_pack: ScenarioPack) -> bo
 | 单元测试（不连网络） | 响应解析测试 | Fake `ModelProvider` 返回与真实 GLM 响应**完整包装格式**一致的 JSON，测到"解析真实响应结构"这段代码，而非只测简化后的业务对象 |
 | 单元测试（不连网络） | 循环检测确定性测试 | Fake `CandidateGenerator` 持续返回相同决策，制造"卡循环"场景，验证 §6.3 四条循环检测规则（5条窗口连续3次相同指纹等）触发 |
 | 模块间耦合测试（连真实GLM） | LLM 判断质量本身 | 验证 Scheduler 在真实场景下是否真的会在该升级、该终止时做出正确决策；无法用 Fake 可靠模拟；执行前需按 `AGENTS.md` 硬约束获得用户明确授权，不得在常规 CI 中默认运行 |
+
+---
+
+## 11. Trace 复用池设计（过往成功咨询案例复用，2026-09-03 新增）
+
+产品级规则见 `docs/product/requirements.md` §25，决策依据见 `DECISIONS.md` D32。
+
+### 11.1 沉淀什么、何时沉淀
+
+- 沉淀时机：一个 Run 通过 `DeliveryGate` 全部校验、进入 `passing`/交付完成状态时，异步沉淀一条范例记录，不阻塞主流程交付。
+- 沉淀内容（结构化，不存原始对话文本，与现有 Trace 脱敏原则一致）：
+  - `scenario_id`：所属 ScenarioPack；
+  - `confirmed_facts` 的**去 PII 摘要**（复用现有 Trace 脱敏工作副本机制，不新增一套脱敏逻辑）；
+  - 命中的 `claim_items`（`item_key` + 三态判断结果 + 关联 `evidence_id`，不存证据原文，只存引用）；
+  - 选用的 `action_templates` 分支 `condition_key`；
+  - `run_id`/`created_at`，供审计追溯到原始 Trace。
+
+### 11.2 存储与检索
+
+- 存储：复用 §8 已定的 PostgreSQL/Trace 存储路线，作为 Trace 表的关键字段独立列（或同一存储技术下的独立表，具体建表设计留待实现阶段），不引入新的存储技术。
+- 检索：复用现有 `ToolExecutor` + 已有检索 Adapter 模式（`SearchCasesAdapter` 同类模式），按 `scenario_id` + 事实相似度检索，不新建独立检索栈、不引入新的向量库。
+- 调用方：`AnalysisAgent` 在对 `claim_items()` 做结构化多标签分类时，可将检索到的相似范例作为**辅助上下文**一并传入模型调用，不改变现有 `EVIDENCE_EXISTS` 校验逻辑。
+
+### 11.3 硬性护栏（不可违反）
+
+1. **范例池内容不得作为 `Evidence` 引用，不得进入 `citation_map`**——扩展现有硬约束"模型记忆、搜索摘要和未核验网页不得成为最终证据"为"过往 Run 沉淀同样不得作为最终证据"。
+2. 只有通过 `DeliveryGate` 校验的 Run 才能进入范例池；被 Review 打回或未完成交付的 Run 不得沉淀，防止未过审内容污染后续判断。
+3. 范例池是**辅助上下文**，不是判断依据本身——`DeliveryGate` 的 `EVIDENCE_EXISTS` 检查范围不因此扩大，Analysis 的最终判断仍必须绑定当次检索到的 `evidence_id`。
+4. 范例记录不存原始用户陈述文本；用户删除咨询时，其贡献的范例记录需能被定位并处理（具体删除/匿名化策略留待实现阶段细化，需符合 `docs/product/requirements.md` §9 的数据生命周期约束，不得因为进了范例池就绕过用户删除请求）。
 

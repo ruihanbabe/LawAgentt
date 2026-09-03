@@ -6,7 +6,7 @@ from runtime.board_runtime import UnderstandingAgent
 from runtime.context import ContextService
 from runtime.messages import AgentRole
 from runtime.taskboard import AgentRunBoard, BoardTask
-from scenario_pack import ActionTemplateSpec, FactKeySpec
+from scenario_pack import ActionTemplateSpec, FactKeySpec, PartyLabels
 
 
 class DemoScenarioPack:
@@ -23,11 +23,17 @@ class DemoScenarioPack:
     def is_out_of_scope(self, facts):
         return facts.get("topic") == "excluded"
 
-    def amount_calculation_items(self):
+    def party_labels(self, facts):
+        return PartyLabels(self_label="发起方", counterparty_label="回应方")
+
+    def claim_items(self):
         return []
 
-    def is_amount_item_applicable(self, item_key, facts):
-        return False
+    def is_claim_item_applicable(self, item_key, facts):
+        raise ValueError(item_key)
+
+    def retrieval_query_prefix(self):
+        return "演示"
 
     def action_templates(self, facts):
         return ActionTemplateSpec(condition_key="demo")
@@ -53,6 +59,7 @@ class UnderstandingAgentScenarioTests(unittest.TestCase):
         self.assertEqual(board.blackboard.confirmed_facts, {"topic": "demo"})
         self.assertEqual(artifact.content["scenario_id"], "demo-v1")
         self.assertEqual(artifact.content["intent"], "demo-v1")
+        self.assertEqual(artifact.content["party_labels"]["counterparty_label"], "回应方")
         self.assertEqual(artifact.content["missing_fact_keys"], [])
 
     def test_questions_come_from_pack_not_agent_dictionary(self):

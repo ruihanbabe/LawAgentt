@@ -26,6 +26,7 @@ make health
 
 - Feature 按 `depends_on` 拓扑顺序选择；默认每次只激活一个 Feature，仅在满足 [`docs/development/DEVELOPMENT.md`](docs/development/DEVELOPMENT.md)「Feature 选择顺序与并行边界」列出的条件（互不依赖、独立分支、无共享文件重叠）时才允许多个 Feature 并行处于 `active`。当前 Feature（或并行组）未完成其必需验证（跨组件时含端到端验证）前，不得开始下一个不满足并行条件的 Feature，也不得顺带重构无关功能。
 - 只读取和修改当前任务需要的文件，不做相邻重构；保留用户已有改动。
+- **Runtime 层（`src/runtime/`、`src/conversation/` 等非 ScenarioPack 目录）禁止出现具体对象身份词汇**（"房东"/"用人单位"/"保险公司"等），包括代码变量名、Pydantic 字段名、错误兜底文案、日志/Trace 文案；测试 fixture 与 ScenarioPack 自身文件不受此约束。具体称谓只能通过 `ScenarioPack.party_labels()` 注入，渲染给用户时才替换为具体文案。提交前可用 `grep -rn "房东\|用人单位\|保险公司" src/runtime src/conversation` 做启发式排查（非穷举，新词需人工判断是否属于"具体对象身份"，不得因不在此列表就默认合规）。依据见 `DECISIONS.md` D28、D29。
 - **实现任一 Feature 时禁止完整读取 [`DECISIONS.md`](DECISIONS.md)、[`docs/architecture/scenario-pack-and-streaming-design.md`](docs/architecture/scenario-pack-and-streaming-design.md)、[`docs/product/requirements.md`](docs/product/requirements.md) 三份文件的全文。** 正确做法：先读 [`docs/features.json`](docs/features.json) 中该 Feature 自己的条目，取出 `context_refs`；对 `context_refs.decisions` 的每个 ID 用 `grep '<!-- id: Dxx -->'` 定位标题行，只读该行到下一条 `## ` 之前；对 `architecture_sections` / `requirements_sections` 的每个章节号按 `## N.` / `### N.M` 标题定位，只读该节到下一个同级或更高级标题之前；有 `depends_on` 时额外只读被依赖 Feature 在 `docs/features.json` 里的条目（了解上游接口），不读其关联的 `context_refs` 内容。仅当调试明确怀疑"决策理解错误"、且定点读取仍无法确认时，才允许临时读整份文件排查；排查完成后按上述定点方式继续，不得把整份文件留在长期上下文。完整步骤见 [`docs/development/DEVELOPMENT.md`](docs/development/DEVELOPMENT.md)「每 Feature 的上下文投影」。
 - Review 或诊断任务默认只报告，不自动修改。
 - 不提交 `.env`、凭据、原始 PII、完整 Provider payload 或未脱敏 Trace。

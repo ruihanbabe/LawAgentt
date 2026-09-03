@@ -43,6 +43,10 @@
         : `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const userId = localStorage.getItem("lawagent_user_id") || generatedUserId;
       localStorage.setItem("lawagent_user_id", userId);
+      const generatedToken = Array.from(crypto.getRandomValues(new Uint8Array(32)),
+        byte => byte.toString(16).padStart(2, "0")).join("");
+      const sessionToken = localStorage.getItem("lawagent_session_token") || generatedToken;
+      localStorage.setItem("lawagent_session_token", sessionToken);
 
       function consumeFrame(frame) {
         const dataLine = frame.split("\n").find((line) => line.startsWith("data:"));
@@ -76,7 +80,7 @@
           const response = await fetch("/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text, user_id: userId }),
+            body: JSON.stringify({ text, user_id: userId, token: sessionToken }),
           });
           if (!response.ok || !response.body) throw new Error(`请求失败（${response.status}）`);
 

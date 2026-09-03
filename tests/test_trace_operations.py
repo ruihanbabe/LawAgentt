@@ -42,7 +42,7 @@ class TraceFailClosedTests(unittest.TestCase):
 class TraceHttpTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.harness = build_harness()
-        self.first = self.harness.handle("房东不退押金", session_id="trace-http")
+        self.first = await self.harness.handle_async("房东不退押金", session_id="trace-http")
         self.transport = httpx.ASGITransport(app=app)
 
     async def test_trace_view_and_replay(self):
@@ -63,7 +63,7 @@ class TraceHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("sanitized_input", trace_response.json())
         self.assertEqual(replay_response.status_code, 200)
         replay_id = replay_response.json()["replay_run_id"]
-        replay_trace = self.harness.conversation_repository.get_trace(replay_id)
+        replay_trace = await self.harness.get_trace(replay_id)
         self.assertIn(EventType.REPLAY_STARTED, [item.event_type for item in replay_trace.events])
 
     async def test_dev_routes_are_hidden_by_default(self):

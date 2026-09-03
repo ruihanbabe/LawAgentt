@@ -2,10 +2,41 @@ from __future__ import annotations
 
 import unittest
 
+from knowledge.evidence_views import CaseEvidenceView, LawEvidenceView
 from runtime.context import ContextService
 from runtime.messages import AgentRole
 from persistence.storage import HistoryMessage
 from runtime.taskboard import AgentRunBoard, Artifact, ArtifactType, BoardTask
+from runtime.tools import (
+    ToolExecutor,
+    ToolPermission,
+    ToolRegistry,
+    ToolResult,
+    ToolResultStatus,
+    ToolSpec,
+)
+
+
+class ContextSearchAdapter:
+    def __init__(self, name, permission, item):
+        self.spec = ToolSpec(
+            name=name,
+            description=name,
+            input_schema={
+                "type": "object",
+                "required": ["query"],
+                "properties": {"query": {"type": "string"}, "top_k": {"type": "integer"}},
+                "additionalProperties": False,
+            },
+            output_schema={},
+            permissions=[permission],
+        )
+        self.item = item
+        self.calls = []
+
+    def execute(self, arguments):
+        self.calls.append(arguments)
+        return ToolResult(tool_name=self.spec.name, status=ToolResultStatus.SUCCESS, items=[self.item])
 
 
 class ContextServiceTests(unittest.TestCase):
@@ -131,6 +162,44 @@ class ContextServiceTests(unittest.TestCase):
         self.assertEqual(first.content_hash, second.content_hash)
         with self.assertRaises(Exception):
             first.objective = "mutated"
+
+    def test_analysis_context_hole_uses_executor_and_registers_formal_evidence_bundle(self):
+        law = ContextSearchAdapter(
+            "search_statutes", ToolPermission.SEARCH_PUBLIC_LAW,
+            LawEvidenceView(
+                chunk_id="law-context", law_family_id="family", law_version_id="version",
+                title="规则", content="规则内容", validity_status="current",
+                effective_from="2021-01-01",
+            ),
+        )
+        case = ContextSearchAdapter(
+            "search_cases", ToolPermission.SEARCH_SANITIZED_CASES,
+            CaseEvidenceView(case_id="case-context", title="案例"),
+        )
+        registry = ToolRegistry()
+        registry.register(law)
+        registry.register(case)
+        executor = ToolExecutor(registry, {
+            ToolPermission.SEARCH_PUBLIC_LAW,
+            ToolPermission.SEARCH_SANITIZED_CASES,
+        })
+        service = ContextService(tool_executor=executor)
+        task = self.task()
+
+        view = service.build(role=AgentRole.ANALYSIS, task=task, board=self.board)
+        repeated = service.build(role=AgentRole.ANALYSIS, task=task, board=self.board)
+
+        bundle = next(
+            item for item in self.board.artifacts
+            if item.producer_agent == "context-service-v0.1"
+        )
+        self.assertEqual(bundle.task_id, task.task_id)
+        self.assertEqual(bundle.evidence_refs, ["law:law-context", "case:case-context"])
+        self.assertEqual(view.evidence_ids, ("law:law-context", "case:case-context"))
+        self.assertEqual(repeated.evidence_ids, view.evidence_ids)
+        self.assertEqual(len(law.calls), 1)
+        self.assertEqual(len(case.calls), 1)
+        self.assertNotIn(self.board.sanitized_input, law.calls[0]["query"])
 
 
 if __name__ == "__main__":

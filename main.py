@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 import api.sse as sse_api
 from api.sse import ChatInput, build_chat_stream
+from api.session_auth import InMemoryTokenBindingStore
 from persistence.storage import FaultInjectingConversationRepository
 from persistence.trace_tools import trace_view
 
@@ -24,6 +25,7 @@ app = FastAPI(
     description="法律检索问答 Agent 的最小 Web 与 SSE 接口。",
     version="0.1.0",
 )
+session_auth_store = InMemoryTokenBindingStore()
 
 
 class FaultInput(BaseModel):
@@ -78,6 +80,8 @@ async def stream_ai(req: ChatInput, request: Request) -> StreamingResponse:
     ``data: [DONE]``。
     """
 
+    if not session_auth_store.authenticate_or_bind(req.user_id, req.token):
+        raise HTTPException(status_code=403, detail="invalid session credentials")
     return StreamingResponse(
         build_chat_stream(req=req, request=request),
         media_type="text/event-stream",
@@ -101,7 +105,7 @@ async def get_trace(
     x_lawagent_dev_token: str | None = Header(default=None),
 ) -> dict:
     require_dev_access(x_lawagent_dev_token)
-    trace = sse_api.conversation_harness.conversation_repository.get_trace(run_id)
+    trace = await sse_api.conversation_harness.get_trace(run_id)
     if trace is None:
         raise HTTPException(status_code=404, detail="trace not found")
     return trace_view(trace)
@@ -132,10 +136,10 @@ async def replay_trace(
 ) -> dict[str, str]:
     require_dev_access(x_lawagent_dev_token)
     harness = sse_api.conversation_harness
-    trace = harness.conversation_repository.get_trace(run_id)
+    trace = await harness.get_trace(run_id)
     if trace is None:
         raise HTTPException(status_code=404, detail="trace not found")
-    result = harness.handle(
+    result = await harness.handle_async(
         trace.sanitized_input,
         session_id=None,
         pseudonymous_user_id=trace.pseudonymous_user_id,

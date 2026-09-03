@@ -49,6 +49,7 @@ class DeliveryGate:
     SAFE_ERROR_TEXT = "当前无法安全生成回复，请稍后重试或补充信息。"
     _allowed_decisions = {
         "clarification_needed",
+        "intent_confirmation_needed",
         "supported_answer",
         "limited_answer",
         "constructive_abstention",
@@ -143,7 +144,17 @@ class DeliveryGate:
             if item.artifact_type == ArtifactType.RAG_EVIDENCE_BUNDLE
             for ref in item.evidence_refs
         }
-        if cited_ids and not cited_ids.issubset(known_evidence):
+        item_evidence_ids = {
+            str(evidence_id)
+            for section_name in ("amount_items", "disputed_items")
+            for item in (final.content.get("sections") or {}).get(section_name, [])
+            if isinstance(item, dict)
+            for evidence_id in item.get("evidence_ids", [])
+        }
+        if (
+            (cited_ids and not cited_ids.issubset(known_evidence))
+            or not item_evidence_ids.issubset(cited_ids)
+        ):
             failures.append("EVIDENCE_NOT_FOUND")
         else:
             passed.append(DeliveryCheck.EVIDENCE_EXISTS)

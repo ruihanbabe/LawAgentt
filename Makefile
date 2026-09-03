@@ -15,7 +15,7 @@ PYCACHE_DIR ?= /tmp/lawagentt-pycache
 
 .PHONY: help python-ready setup status run health compile test test-e2e lint check verify \
 	services-up services-status services-smoke services-down \
-	qdrant-up qdrant-status qdrant-down model-smoke clean
+	qdrant-up qdrant-status qdrant-down model-smoke test-coupling clean
 
 help: ## Show available standardized commands
 	@awk 'BEGIN {FS = ":.*## "; printf "LawAgent developer commands\n\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -85,6 +85,11 @@ qdrant-down: ## Stop the repository Qdrant service without deleting its volume
 model-smoke: ## Run the six-role GLM smoke; requires an explicitly configured key
 	@mkdir -p "$(REPORT_DIR)"
 	@PYTHONPATH=src "$(PYTHON)" scripts/smoke_glm_six_roles.py --output "$(REPORT_DIR)/glm-six-role-smoke.json"
+
+test-coupling: ## Run real-service/model coupling checks after explicit authorization
+	@test "$${LAWAGENT_ALLOW_REAL_MODEL_TESTS:-false}" = "true" || { echo "BLOCKED: set LAWAGENT_ALLOW_REAL_MODEL_TESTS=true only after explicit user authorization."; exit 2; }
+	@$(MAKE) services-smoke PYTHON="$(PYTHON)"
+	@$(MAKE) model-smoke PYTHON="$(PYTHON)"
 
 clean: ## Remove only Python bytecode/cache files
 	@find src scripts tests -type f -name '*.pyc' -delete

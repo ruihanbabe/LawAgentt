@@ -24,6 +24,12 @@ class ConnectedRequest:
         return False
 
 
+COMPLETE_FACTS = (
+    "境内住宅租赁争议发生于2024-06-01，我已退租交还钥匙，押金3000元，"
+    "房东说损坏，合同有押金条款，我有转账和聊天记录。"
+)
+
+
 class EvidenceAdapter:
     def __init__(self, name, permission, item):
         self.spec = ToolSpec(
@@ -136,11 +142,13 @@ def build_unverified_law_harness():
 class DeliveryGateSseE2ETests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_success_delivers_only_after_gate_accepts(self):
         harness = build_success_harness()
+        await harness.handle_async(COMPLETE_FACTS, session_id="delivery-success")
         with patch("api.sse.conversation_harness", harness):
             frames = [item async for item in build_chat_stream(
                 req=ChatInput(
-                    text="争议发生于2024-06-01，我已退租交还钥匙，押金3000元，房东说损坏，合同有押金条款，我有转账和聊天记录。",
+                    text="A",
                     user_id="delivery-success",
+                    token="a" * 32,
                 ),
                 request=ConnectedRequest(),
             )]
@@ -148,7 +156,7 @@ class DeliveryGateSseE2ETests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("初步分析", stream)
         self.assertIn("law:law-e2e", stream)
         self.assertEqual(frames[-1], "data: [DONE]\n\n")
-        board = next(iter(harness.run_store.values()))
+        board = list(harness.run_store.values())[-1]
         self.assertEqual(board.status, RunStatus.COMPLETED)
         self.assertIn(EventType.DELIVERY_ACCEPTED, [item.event_type for item in board.events])
         self.assertEqual(board.artifact(board.accepted_artifact_id).content["decision"], "supported_answer")
@@ -157,31 +165,37 @@ class DeliveryGateSseE2ETests(unittest.IsolatedAsyncioTestCase):
         harness = build_failure_harness()
         with patch("api.sse.conversation_harness", harness):
             frames = [item async for item in build_chat_stream(
-                req=ChatInput(text="请直接给我结论。", user_id="delivery-failure"),
+                req=ChatInput(
+                    text="请直接给我结论。",
+                    user_id="delivery-failure",
+                    token="b" * 32,
+                ),
                 request=ConnectedRequest(),
             )]
         stream = "".join(frames)
         self.assertIn("当前无法安全生成回复", stream)
         self.assertNotIn("未经复核的法律结论", stream)
         self.assertEqual(frames[-1], "data: [DONE]\n\n")
-        board = next(iter(harness.run_store.values()))
+        board = list(harness.run_store.values())[-1]
         self.assertEqual(board.status, RunStatus.FAILED)
         self.assertIn(EventType.DELIVERY_BLOCKED, [item.event_type for item in board.events])
         self.assertEqual(board.artifact(board.accepted_artifact_id).content["decision"], "safe_error")
 
     async def test_chat_limited_answer_when_retrieval_is_unavailable(self):
         harness = build_limited_harness()
+        await harness.handle_async(COMPLETE_FACTS, session_id="delivery-limited")
         with patch("api.sse.conversation_harness", harness):
             frames = [item async for item in build_chat_stream(
                 req=ChatInput(
-                    text="争议发生于2024-06-01，我已退租交还钥匙，押金3000元，房东说损坏，合同有押金条款，我有转账和聊天记录。",
+                    text="A",
                     user_id="delivery-limited",
+                    token="c" * 32,
                 ),
                 request=ConnectedRequest(),
             )]
         stream = "".join(frames)
         self.assertIn("本轮只提供有限结果", stream)
-        board = next(iter(harness.run_store.values()))
+        board = list(harness.run_store.values())[-1]
         accepted = board.artifact(board.accepted_artifact_id)
         self.assertEqual(board.status, RunStatus.COMPLETED)
         self.assertEqual(accepted.content["decision"], "limited_answer")
@@ -189,17 +203,19 @@ class DeliveryGateSseE2ETests(unittest.IsolatedAsyncioTestCase):
 
     async def test_chat_abstains_when_law_version_is_unverified(self):
         harness = build_unverified_law_harness()
+        await harness.handle_async(COMPLETE_FACTS, session_id="delivery-abstention")
         with patch("api.sse.conversation_harness", harness):
             frames = [item async for item in build_chat_stream(
                 req=ChatInput(
-                    text="争议发生于2024-06-01，我已退租交还钥匙，押金3000元，房东说损坏，合同有押金条款，我有转账和聊天记录。",
+                    text="A",
                     user_id="delivery-abstention",
+                    token="d" * 32,
                 ),
                 request=ConnectedRequest(),
             )]
         stream = "".join(frames)
         self.assertIn("法规版本或效力状态尚未确认", stream)
-        board = next(iter(harness.run_store.values()))
+        board = list(harness.run_store.values())[-1]
         accepted = board.artifact(board.accepted_artifact_id)
         self.assertEqual(board.status, RunStatus.COMPLETED)
         self.assertEqual(accepted.content["decision"], "constructive_abstention")

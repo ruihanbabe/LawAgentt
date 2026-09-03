@@ -20,6 +20,9 @@ from conversation.harness import TracePersistenceError, build_default_harness
 from infrastructure.glm_provider import build_glm_gateway_from_env
 from infrastructure.env import load_project_env
 from knowledge.qdrant_tools import LazyRuntimeToolExecutor
+from runtime.hooks import HookDispatcher
+from runtime.memory import sliding_window_context_manager
+from runtime.taskboard import CollaborationEvent, EventType, EventVisibility
 
 
 def build_configured_harness():
@@ -43,6 +46,7 @@ conversation_harness = build_configured_harness()
 
 ChatText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8_000)]
 UserId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
+AnonymousToken = Annotated[str, StringConstraints(min_length=32, max_length=256)]
 
 
 class ContextMessage(BaseModel):
@@ -61,6 +65,7 @@ class ChatInput(BaseModel):
 
     text: ChatText = Field(description="用户当前提问文本。")
     user_id: UserId = Field(description="会话用户标识，用于隔离内存对话历史。")
+    token: AnonymousToken = Field(description="仅用于校验当前用户与会话的匿名高熵 Token。")
     context: list[ContextMessage] | None = Field(
         default=None,
         max_length=20,
@@ -80,22 +85,6 @@ class ChatInput(BaseModel):
 history_store: dict[str, list[dict[str, str]]] = {}
 
 
-# 滑动窗口上下文管理器实现
-def sliding_window_context_manager(
-    full_history: list[dict[str, str]], window_size: int
-) -> list[dict[str, str]]:
-    """保留最近 ``window_size`` 条用户/助手消息，不修改调用方列表。"""
-
-    if window_size <= 0:
-        return []
-    history_conversation = [
-        message
-        for message in full_history
-        if message.get("role") in {"user", "assistant"}
-    ]
-    return list(history_conversation[-window_size:])
-
-
 def encode_sse(payload: dict[str, str] | str) -> str:
     """把一个协议事件编码成完整 SSE data frame。"""
 
@@ -110,33 +99,75 @@ async def iter_agent_events(
     session_id: str | None = None,
     pseudonymous_user_id: str | None = None,
 ) -> AsyncIterator[dict[str, str]]:
-    """执行自研共享任务板 Runtime，并转换为前端稳定事件。"""
+    """在线程中运行同步 Runtime，并实时转发 USER 可见里程碑。"""
 
     current_question = next(
         (message["content"] for message in reversed(messages) if message["role"] == "user"),
         "",
     )
-    result = conversation_harness.handle(
-        current_question,
-        session_id=session_id,
-        pseudonymous_user_id=pseudonymous_user_id,
-    )
-    board = result.board
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[CollaborationEvent | None] = asyncio.Queue()
 
-    yield {"type": "run_started", "content": board.run_id}
-    for task in board.tasks:
-        event_type = "tool_call" if task.task_type == "retrieve_context" else "status_changed"
-        yield {"type": event_type, "content": f"{task.task_type}:{task.status.value}"}
-    for event in board.events:
-        if event.event_type.value == "task_completed" and event.task_id:
-            completed_task = board.task(event.task_id)
-            if completed_task.task_type == "retrieve_context":
-                yield {"type": "tool_result", "content": event.event_type.value}
+    def event_sink(event: CollaborationEvent) -> None:
+        if event.visibility == EventVisibility.USER:
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+
+    dispatcher = HookDispatcher()
+    dispatcher.subscribe(event_sink, min_visibility=EventVisibility.USER)
+
+    async def run_with_dispatcher():
+        try:
+            return await conversation_harness.handle_async(
+                current_question,
+                session_id=session_id,
+                pseudonymous_user_id=pseudonymous_user_id,
+                event_sink=dispatcher.dispatch,
+            )
+        finally:
+            await queue.put(None)
+
+    run_task = asyncio.create_task(run_with_dispatcher())
+    run_started = False
+    try:
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            if not run_started:
+                yield {"type": "run_started", "content": event.run_id}
+                run_started = True
+            projected = _project_user_event(event)
+            if projected is not None:
+                yield projected
+        result = await run_task
+    except asyncio.CancelledError:
+        run_task.cancel()
+        raise
+
+    if not run_started:
+        yield {"type": "run_started", "content": result.board.run_id}
 
     # 第一切片的回答由确定性安全 Agent 产生；后续真实生成模型仍沿用 chunk 协议。
     response = result.response
     for start in range(0, len(response), 24):
         yield {"type": "chunk", "content": response[start : start + 24]}
+
+
+def _project_user_event(event: CollaborationEvent) -> dict[str, str] | None:
+    task_type = str(event.payload.get("task_type") or "task")
+    if event.event_type == EventType.TASK_STARTED:
+        event_type = "tool_call" if task_type == "retrieve_context" else "status_changed"
+        return {"type": event_type, "content": f"{task_type}:started"}
+    if event.event_type == EventType.TASK_COMPLETED:
+        event_type = "tool_result" if task_type == "retrieve_context" else "status_changed"
+        return {"type": event_type, "content": f"{task_type}:completed"}
+    if event.event_type in {
+        EventType.DELIVERY_ACCEPTED,
+        EventType.DELIVERY_BLOCKED,
+        EventType.RUN_COMPLETED,
+    }:
+        return {"type": "status_changed", "content": event.event_type.value}
+    return None
 
 
 async def build_chat_stream(req: ChatInput, request: Request) -> AsyncGenerator[str, None]:

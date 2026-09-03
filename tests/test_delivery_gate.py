@@ -48,7 +48,8 @@ class DeliveryGateTests(unittest.TestCase):
                 "claims": [{"text": "应结合合同约定判断。", "evidence_ids": ["law:1"]}],
                 "sections": {
                     "current_situation": [], "preliminary_assessment": [],
-                    "landlord_reason_analysis": [], "statutes": [], "similar_cases": [],
+                    "counterparty_position_analysis": [], "statutes": [], "similar_cases": [],
+                    "disputed_items": [],
                     "materials": [], "low_cost_communication": [], "formal_notice": [],
                     "other_remedies": [], "limitations": ["仅为基于固定快照的初步分析。"],
                 },
@@ -93,6 +94,22 @@ class DeliveryGateTests(unittest.TestCase):
         result = DeliveryGate().evaluate(self.board)
         self.assertFalse(result.approved)
         self.assertIn("CLAIMS_UNGROUNDED", result.failure_codes)
+        self.assertIn("EVIDENCE_NOT_FOUND", result.failure_codes)
+
+    def test_blocks_claim_item_with_evidence_outside_final_bundle(self):
+        final = self.add_valid_chain()
+        final.content["sections"]["amount_items"] = [{
+            "item_key": "item",
+            "display_name": "请求项目",
+            "relief_kind": "monetary",
+            "applicability": "applicable",
+            "legal_basis_hint": "请求项目依据",
+            "evidence_ids": ["law:unknown"],
+            "calculation_logic": "核对基数与标准，不输出最终精确数额",
+            "requires_user_confirmation": True,
+        }]
+        result = DeliveryGate().evaluate(self.board)
+        self.assertFalse(result.approved)
         self.assertIn("EVIDENCE_NOT_FOUND", result.failure_codes)
 
     def test_blocks_pii_in_response(self):

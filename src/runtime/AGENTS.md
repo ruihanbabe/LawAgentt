@@ -14,6 +14,7 @@
 - 工具调用遵守权限和契约；具体 Agent 与 LLM 实现可替换，不能改变核心数据语义。
 - Runtime 消费 Intake、Knowledge 与 Safety 的能力，不接管其数据 owner 或最终 DeliveryGate 决策。
 - 角色/Scheduler 判断自身能力或权限不匹配时，必须产出 `EscalationRequest`（不得自行决定下一步调度或转派对象），Schema 定义见 [`../../docs/architecture/scenario-pack-and-streaming-design.md`](../../docs/architecture/scenario-pack-and-streaming-design.md) §9.1；跨角色复用同一份定义，禁止重新声明同名但字段不同的模型。Scheduler 的产出物类型只能是 `TaskIntent` 或 `EscalationRequest` 二选一，不存在第三种返回类型。
+- 本模块代码（含 `FinalResponseSections` 等 Schema 定义、角色兜底文案）禁止出现具体对象身份词汇，只能通过 `ScenarioPack.party_labels()` 取得本方/对方称谓；`AnalysisAgent` 对 `ScenarioPack.claim_items()` 的判断必须是**一次**结构化多标签分类调用（不逐项调用模型），`applicable`/`uncertain` 结果必须绑定 `evidence_id`。完整契约见 [`../../docs/architecture/scenario-pack-and-streaming-design.md`](../../docs/architecture/scenario-pack-and-streaming-design.md) §1.2/§1.10/§1.11，决策依据见 `DECISIONS.md` D28–D31。
 
 ## 修改后验证
 

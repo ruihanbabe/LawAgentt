@@ -16,6 +16,7 @@ class AgentRole(StrEnum):
     ANALYSIS = "analysis"
     DRAFTING = "drafting"
     REVIEW = "review"
+    SCHEDULER = "scheduler"
     HUMAN = "human"
     SYSTEM = "system"
 
